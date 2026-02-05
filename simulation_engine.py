@@ -7,10 +7,9 @@ from statsmodels.regression.rolling import RollingOLS
 from sklearn.decomposition import PCA
 import pandas_datareader.data as web
 from datetime import datetime
-import unicodedata  # 追加: 全角文字対応のため
 
 # =========================================================
-# 🛠️ Class Definitions (Brain: V17.2 - Japanese Edition)
+# 🛠️ Class Definitions (Brain: V17.2 - English Edition)
 # =========================================================
 
 class MarketDataEngine:
@@ -21,39 +20,23 @@ class MarketDataEngine:
         self.usdjpy_cache = None
 
     def validate_tickers(self, input_dict):
-        """Check if tickers exist with Japanese input support."""
+        """Check if tickers exist."""
         valid_data = {}
         invalid_tickers = []
         status_text = st.empty()
         
         for ticker, weight in input_dict.items():
-            # ▼▼▼ 追加: 日本語入力（全角）のサニタイズ処理 ▼▼▼
-            try:
-                # 全角英数(Ａ)を半角(A)に変換し、大文字化、空白除去
-                clean_ticker = unicodedata.normalize('NFKC', str(ticker)).upper().strip()
-                
-                # 重みも全角数字の可能性があるため変換
-                if isinstance(weight, str):
-                    clean_weight = float(unicodedata.normalize('NFKC', weight))
-                else:
-                    clean_weight = float(weight)
-            except:
-                # 変換不能な場合は元の値を使用（後のtryで弾かれる）
-                clean_ticker = ticker
-                clean_weight = weight
-            # ▲▲▲ 追加終了 ▲▲▲
-
             try:
                 # Check via yfinance
-                tick = yf.Ticker(clean_ticker)
+                tick = yf.Ticker(ticker)
                 hist = tick.history(period="5d")
                 if not hist.empty:
-                    valid_data[clean_ticker] = {'name': clean_ticker, 'weight': clean_weight}
-                    status_text.text(f"✅ OK: {clean_ticker}")
+                    valid_data[ticker] = {'name': ticker, 'weight': weight}
+                    status_text.text(f"✅ OK: {ticker}")
                 else:
-                    invalid_tickers.append(clean_ticker)
+                    invalid_tickers.append(ticker)
             except:
-                invalid_tickers.append(clean_ticker)
+                invalid_tickers.append(ticker)
         
         status_text.empty()
         return valid_data, invalid_tickers
@@ -417,44 +400,40 @@ class PortfolioDiagnosticEngine:
         
         num_assets = len(weights_dict)
         
-        # ▼▼▼ 翻訳: 診断レポート ▼▼▼
         if num_assets == 1:
-            report["type"] = "🏹 一点集中型 (Sniper)"
-            report["diversification_comment"] = "分散ゼロ。すべての卵を一つのカゴに入れています。"
-            report["risk_comment"] = "⚠️ 個別銘柄リスクが最大化しています。"
-            report["action_plan"] = "少なくとも3〜5つの異なる資産（相関の低いもの）に分散してください。"
+            report["type"] = "🏹 Concentrated (Sniper)"
+            report["diversification_comment"] = "Zero diversification. All eggs in one basket."
+            report["risk_comment"] = "⚠️ Maximum specific risk exposure."
+            report["action_plan"] = "Diversify into at least 3-5 uncorrelated assets."
         else:
             if pca_ratio >= 0.85:
-                report["type"] = "⚠️ 見せかけの分散 (Fake Diversification)"
-                report["diversification_comment"] = f"変動の{pca_ratio*100:.1f}%が、実は単一の要因で説明されています。"
-                report["risk_comment"] = "すべての資産が同時に暴落するリスクが高い状態です。"
-                report["action_plan"] = "債券やコモディティなど、値動きの異なる資産を追加してください。"
+                report["type"] = "⚠️ Fake Diversification"
+                report["diversification_comment"] = f"{pca_ratio*100:.1f}% of variance is explained by a single factor."
+                report["risk_comment"] = "High risk of all assets crashing simultaneously."
+                report["action_plan"] = "Add uncorrelated assets like Bonds or Commodities."
             elif pca_ratio <= 0.60:
-                report["type"] = "🏰 鉄壁の分散 (Fortress)"
-                report["diversification_comment"] = f"主要因による説明率は{pca_ratio*100:.1f}%に留まります。素晴らしい分散効果です。"
-                report["risk_comment"] = "不要なリスクが効果的に排除されています。"
-                report["action_plan"] = "現在のバランスは理想的です。定期的なリバランスで維持しましょう。"
+                report["type"] = "🏰 Fortress Diversification"
+                report["diversification_comment"] = f"Only {pca_ratio*100:.1f}% explained by main factor. Excellent structure."
+                report["risk_comment"] = "Unnecessary risks are effectively diversified away."
+                report["action_plan"] = "Current balance is great. Maintain with regular rebalancing."
             else:
-                report["type"] = "⚖️ バランス型 (Balanced)"
-                report["diversification_comment"] = f"主要因の支配率は{pca_ratio*100:.1f}%です。中程度の分散効果があります。"
-                report["risk_comment"] = "市場平均と似たような動きをする可能性が高いです。"
-                report["action_plan"] = "防御力を高めるために、債券比率の調整を検討してください。"
-        # ▲▲▲ 翻訳終了 ▲▲▲
+                report["type"] = "⚖️ Balanced Allocation"
+                report["diversification_comment"] = f"{pca_ratio*100:.1f}% factor dominance. Moderate diversification."
+                report["risk_comment"] = "Likely to perform similarly to the market average."
+                report["action_plan"] = "Consider adjusting bond ratios to harden defenses."
 
         return report
 
     @staticmethod
     def get_skew_kurt_desc(port_ret):
-        if port_ret.empty: return "データ不足です。"
+        if port_ret.empty: return "Insufficient data."
         skew = port_ret.skew()
         kurt = port_ret.kurt()
         desc = []
-        # ▼▼▼ 翻訳: 統計分布コメント ▼▼▼
-        if skew < -0.5: desc.append("⚠️ 負の歪度: 急激な下落（クラッシュ）のリスクがあります。")
-        elif skew > 0.5: desc.append("✅ 正の歪度: 大きな上振れが期待できる分布です。")
-        if kurt > 2.0: desc.append("⚠️ ファットテール: 通常よりも極端な事象（暴騰・暴落）が起きやすい状態です。")
-        # ▲▲▲ 翻訳終了 ▲▲▲
-        return " ".join(desc) if desc else "統計的に標準的な分布です（正規分布に近い）。"
+        if skew < -0.5: desc.append("⚠️ Negative Skew: Risk of sudden large losses.")
+        elif skew > 0.5: desc.append("✅ Positive Skew: Potential for large upside.")
+        if kurt > 2.0: desc.append("⚠️ Fat Tails: Extreme events are more likely than normal.")
+        return " ".join(desc) if desc else "Distribution is statistically normal."
 
     @staticmethod
     def generate_factor_report(params):
@@ -463,29 +442,27 @@ class PortfolioDiagnosticEngine:
         
         comments = []
         
-        # ▼▼▼ 翻訳: ファクター分析コメント ▼▼▼
         # 1. HML
         hml = params.get('HML', 0)
         if hml > 0.15:
-            comments.append("✅ **割安株（バリュー）寄り:** 割安株や高配当株との連動性が高いです。")
+            comments.append("✅ **Value Tilt:** Correlated with undervalued/high-dividend stocks.")
         elif hml < -0.15:
-            comments.append("🚀 **成長株（グロース）寄り:** ハイテク株や成長株との連動性が高いです。")
+            comments.append("🚀 **Growth Tilt:** Correlated with high-growth/tech stocks.")
         else:
-            comments.append("⚖️ **スタイル中立:** バリューとグロースのバランスが取れています。")
+            comments.append("⚖️ **Style Neutral:** Balanced between Value and Growth.")
 
         # 2. SMB
         smb = params.get('SMB', 0)
         if smb > 0.15:
-            comments.append("🐣 **小型株効果:** 変動は大きいですが、高いリターンが期待できる傾向があります。")
+            comments.append("🐣 **Small-Cap Bias:** Higher potential volatility and return.")
         elif smb < -0.15:
-            comments.append("🐘 **大型株寄り:** 安定した大企業中心の構成です。")
+            comments.append("🐘 **Large-Cap Bias:** Stable, established companies.")
         
         # 3. Mkt-RF
         mkt = params.get('Mkt-RF', 1.0)
         if mkt > 1.1:
-            comments.append("🎢 **ハイ・ベータ:** 市場よりも大きく動く、積極的なリスク選好型です。")
+            comments.append("🎢 **High Beta:** Aggressive risk-taking profile.")
         elif mkt < 0.9:
-            comments.append("🛡️ **ロー・ベータ:** 市場の下落に強い、防御的な構成です。")
-        # ▲▲▲ 翻訳終了 ▲▲▲
+            comments.append("🛡️ **Low Beta:** Defensive profile, resistant to market drops.")
 
         return "\n".join(comments)
