@@ -93,6 +93,143 @@ class MarketDataEngine:
             return pd.DataFrame()
 
     @st.cache_data(ttl=3600*24)
+    def fetch_historical_prices(_self, tickers, base_currency='JPY'):
+        """Fetch stock prices. UPDATED: Added multi-currency support."""
+        try:
+            raw_data = yf.download(tickers, start=_self.start_date, end=_self.end_date, interval="1mo", auto_adjust=True, progress=False)
+            data = pd.DataFrame()
+
+            if len(tickers) == 1:
+                ticker = tickers[0]
+                if isinstance(raw_data, pd.Series):
+                    data[ticker] = raw_data
+                elif isinstance(raw_data, pd.DataFrame):
+                    if 'Close' in raw_data.columns:
+                        data[ticker] = raw_data['Close']
+                    else:
+                        data[ticker] = raw_data.iloc[:, 0]
+            else:
+                if isinstance(raw_data.columns, pd.MultiIndex):
+                    try:
+                        data = raw_data.xs('Close', axis=1, level=0, drop_level=True)
+                    except KeyError:
+                        try:
+                            data = raw_data.xs('Adj Close', axis=1, level=0, drop_level=True)
+                        except:
+                            data = raw_data.iloc[:, :len(tickers)]
+                            data.columns = tickers
+                else:
+                    data = raw_data
+
+            data = data.resample('M').last().ffill()
+            if data.index.tz is not None:
+                data.index = data.index.tz_localize(None)
+
+            # ==========================================
+            # 🔄 NEW: Currency Conversion Logic
+            # ==========================================
+            usdjpy = _self._get_usdjpy()
+            if not usdjpy.empty:
+                usdjpy = usdjpy.reindex(data.index, method='ffill')
+                data_converted = data.copy()
+                
+                for col in data.columns:
+                    # Identify if the asset is Japanese
+                    is_japan = str(col).endswith(".T") or str(col) in ["^N225", "^TPX", "1306.T"]
+                    
+                    if base_currency == 'JPY':
+                        # If base is JPY: Multiply foreign assets by USDJPY
+                        if not is_japan:
+                            data_converted[col] = data[col] * usdjpy
+                            
+                    elif base_currency == 'USD':
+                        # If base is USD: Divide Japanese assets by USDJPY
+                        if is_japan:
+                            data_converted[col] = data[col] / usdjpy
+                            
+                data_final = data_converted
+            else:
+                data_final = data
+
+            returns = data_final.pct_change().dropna(how='all').dropna()
+            
+            valid_cols = [c for c in returns.columns if c in tickers]
+            if valid_cols:
+                returns = returns[valid_cols]
+            
+            return returns
+        except Exception as e:
+            st.error(f"Data Fetch Error: {e}")
+            return pd.DataFrame()
+
+    @st.cache_data(ttl=3600*24)
+    def fetch_benchmark_data(_self, ticker, is_jpy_asset=False, base_currency='JPY'):
+        """Fetch benchmark. UPDATED: Added multi-currency support."""
+        try:
+            raw_data = yf.download(ticker, start=_self.start_date, end=_self.end_date, interval="1mo", auto_adjust=True, progress=False)
+            data = pd.Series(dtype=float)
+            if isinstance(raw_data, pd.DataFrame):
+                if 'Close' in raw_data.columns:
+                    data = raw_data['Close']
+                elif isinstance(raw_data.columns, pd.MultiIndex):
+                     try: data = raw_data.xs('Close', axis=1, level=0, drop_level=True)
+                     except: data = raw_data.iloc[:, 0]
+                else:
+                    data = raw_data.iloc[:, 0]
+            else:
+                data = raw_data
+
+            if isinstance(data, pd.DataFrame):
+                data = data.iloc[:, 0]
+
+            data = data.resample('M').last().ffill()
+            if data.index.tz is not None:
+                data.index = data.index.tz_localize(None)
+
+            # ==========================================
+            # 🔄 NEW: Currency Conversion Logic
+            # ==========================================
+            usdjpy = _self._get_usdjpy()
+            if not usdjpy.empty:
+                usdjpy = usdjpy.reindex(data.index, method='ffill')
+                
+                if base_currency == 'JPY':
+                    # If base is JPY, convert foreign benchmarks to JPY
+                    if not is_jpy_asset:
+                        data = data * usdjpy
+                elif base_currency == 'USD':
+                    # If base is USD, convert Japanese benchmarks to USD
+                    if is_jpy_asset:
+                        data = data / usdjpy
+            
+            return data.pct_change().dropna()
+        except:
+            return pd.Series(dtype=float)
+    @st.cache_data(ttl=3600*24*7)
+    def fetch_french_factors(_self, region='US'):
+        """Fetch Fama-French Factors (Robust Fallback)."""
+        try:
+            name = 'F-F_Research_Data_Factors'
+            if region == 'Japan': 
+                name = 'Japan_3_Factors'
+            elif region == 'Global': 
+                name = 'Global_3_Factors'
+
+            # Attempt to fetch data
+            ff_data = web.DataReader(name, 'famafrench', start=_self.start_date, end=_self.end_date)[0]
+            
+            # Process data if successful
+            ff_data = ff_data / 100.0
+            ff_data.index = ff_data.index.to_timestamp(freq='M')
+            
+            if ff_data.index.tz is not None: 
+                ff_data.index = ff_data.index.tz_localize(None)
+            
+            return ff_data
+        except Exception:
+            return pd.DataFrame()
+
+    @st.cache_data(ttl=3600*24)
     def fetch_historical_prices(_self, tickers):
         """Fetch stock prices."""
         try:
