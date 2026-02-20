@@ -113,5 +113,17 @@ TEXTS = {
     'pdf_map_cum': "■ 累積リターン推移 (Cumulative Return)",
     'pdf_map_dd': "■ ドローダウン (Drawdown)",
     'pdf_map_factor': "■ ファクター感応度 (Factor Exposure)",
-    'pdf_map_attr': "■ 寄与度分析 (Attribution)"
+    'pdf_map_attr': "■ 寄与度分析 (Attribution)",
+
+    # ================= PDFダウンロードUI =================
+    'pdf_section_title': "📄 レポート作成",
+    'pdf_section_caption': "分析結果をPDFレポートとしてダウンロードできます。",
+    'btn_generate_pdf': "📥 PDFレポートを作成",
+    'msg_pdf_spinning': "📄 PDFを生成中...",
+    'msg_pdf_ready': "✅ レポート生成完了!",
+    'msg_pdf_err_empty': "⚠️ PDFデータの生成に失敗しました（空のデータ）。",
+    'msg_pdf_err_nodata': "⚠️ シミュレーションデータが見つかりません。",
+    'msg_pdf_err_gen': "PDF生成エラー: ",
+    'btn_download_pdf': "⬇️ PDFファイルをダウンロード",
+    'msg_pdf_hint': "ℹ️ PDFレポートを作成するには、まず「分析を開始する」ボタンを押してシミュレーションを実行してください。"
 }
