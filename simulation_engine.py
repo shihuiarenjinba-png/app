@@ -8,8 +8,22 @@ from sklearn.decomposition import PCA
 import pandas_datareader.data as web
 from datetime import datetime
 
+# 🔻追加: 多言語辞書モジュールの読み込み
+try:
+    from i18n import ja, en
+except ImportError:
+    pass # 実行環境によってはapp.py側でエラーハンドリングするためここはpass
+
+# 翻訳呼び出し用のヘルパー関数 (エンジン内用)
+def get_text(key, lang='JA'):
+    lang_upper = str(lang).upper()
+    if lang_upper == 'JA':
+        return ja.TEXTS.get(key, key)
+    else:
+        return en.TEXTS.get(key, key)
+
 # =========================================================
-# 🛠️ Class Definitions (Brain: V18.3 - 5-Factor & Multi-Lingual)
+# 🛠️ Class Definitions (Brain: V18.4 - Fully Modularized i18n)
 # =========================================================
 
 class MarketDataEngine:
@@ -72,10 +86,9 @@ class MarketDataEngine:
     def fetch_french_factors(_self, region='US'):
         """Fetch Fama-French 5 Factors."""
         try:
-            # 🔻修正: 5ファクターモデルへの変更
             name = 'F-F_Research_Data_5_Factors_2x3'
             if region == 'Japan': 
-                name = 'Japan_5_Factors' # ※注: DataReaderの仕様によっては要確認
+                name = 'Japan_5_Factors' 
             elif region == 'Global': 
                 name = 'Global_5_Factors'
 
@@ -137,25 +150,19 @@ class MarketDataEngine:
             if data.index.tz is not None:
                 data.index = data.index.tz_localize(None)
 
-            # ==========================================
-            # 🔄 Currency Conversion Logic
-            # ==========================================
             usdjpy = _self._get_usdjpy()
             if not usdjpy.empty:
                 usdjpy = usdjpy.reindex(data.index, method='ffill')
                 data_converted = data.copy()
                 
                 for col in data.columns:
-                    # Identify if the asset is Japanese
                     is_japan = str(col).endswith(".T") or str(col) in ["^N225", "^TPX", "1306.T"]
                     
                     if base_currency == 'JPY':
-                        # If base is JPY: Multiply foreign assets by USDJPY
                         if not is_japan:
                             data_converted[col] = data[col] * usdjpy
                             
                     elif base_currency == 'USD':
-                        # If base is USD: Divide Japanese assets by USDJPY
                         if is_japan:
                             data_converted[col] = data[col] / usdjpy
                             
@@ -198,19 +205,14 @@ class MarketDataEngine:
             if data.index.tz is not None:
                 data.index = data.index.tz_localize(None)
 
-            # ==========================================
-            # 🔄 Currency Conversion Logic
-            # ==========================================
             usdjpy = _self._get_usdjpy()
             if not usdjpy.empty:
                 usdjpy = usdjpy.reindex(data.index, method='ffill')
                 
                 if base_currency == 'JPY':
-                    # If base is JPY, convert foreign benchmarks to JPY
                     if not is_jpy_asset:
                         data = data * usdjpy
                 elif base_currency == 'USD':
-                    # If base is USD, convert Japanese benchmarks to USD
                     if is_jpy_asset:
                         data = data / usdjpy
             
@@ -257,7 +259,6 @@ class PortfolioAnalyzer:
         if merged.empty: return None, None
         
         y = merged['y']
-        # 🔻修正: 回帰分析の変数を5つに拡張 (存在するものだけを使用)
         X_cols = [c for c in merged.columns if c in ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA']]
         if not X_cols: return None, None
         
@@ -393,11 +394,6 @@ class PortfolioAnalyzer:
 
     @staticmethod
     def cost_drag_simulation(port_ret, cost_tier):
-        """
-        Calculates impact of costs.
-        FIXED: Returns exactly 4 values to match app.py expectation.
-        Returns: Gross Curve, Net Curve, Loss Amount, Loss Percentage
-        """
         if port_ret.empty: return pd.Series(), pd.Series(), 0, 0
         
         cost_map = {'Low': 0.001, 'Medium': 0.006, 'High': 0.020}
@@ -414,7 +410,6 @@ class PortfolioAnalyzer:
         diff_val = final_gross - final_net
         lost_pct = 1 - (final_net / final_gross) 
         
-        # Returned annual_cost removed to fix unpacking error in app.py
         return gross_cum, net_cum, diff_val, lost_pct
 
     @staticmethod
@@ -454,86 +449,49 @@ class PortfolioAnalyzer:
 
     @staticmethod
     def calculate_risk_contribution(returns_df, weights_dict):
-        """
-        Calculates Marginal Risk Contribution (MRC).
-        UPDATED: Removed sorting to maintain asset order for comparison charts.
-        """
         assets = list(weights_dict.keys())
         valid_assets = [a for a in assets if a in returns_df.columns]
         if not valid_assets:
             return pd.Series(dtype=float)
 
-        # Filter and Normalize weights
         w_series = pd.Series({k: weights_dict[k] for k in valid_assets})
         w_series = w_series / w_series.sum() 
-        
-        # Covariance Matrix (Annualized)
         cov_matrix = returns_df[valid_assets].cov() * 12 
-        
-        # Portfolio Volatility
         port_vol = np.sqrt(w_series.T @ cov_matrix @ w_series)
-        
-        # Marginal Risk Contribution: (Cov * w) / PortVol
         mrc = cov_matrix @ w_series / port_vol
-        
-        # Risk Contribution: w * MRC
         rc = w_series * mrc
-        
-        # Percent Contribution: RC / PortVol
         rc_pct = rc / port_vol
-        
-        # Removed .sort_values(ascending=False) to keep alignment with weights
         return rc_pct
 
     @staticmethod
     def calculate_label_offsets(values, min_dist=0.08, base_y=1.05):
-        """
-        Calculates Y-axis offsets for histogram labels to prevent overlap.
-        Args:
-            values: List or Series of x-values (stats).
-            min_dist: Minimum normalized distance to consider 'overlapping'.
-            base_y: Starting Y multiplier.
-        Returns:
-            List of Y multipliers [1.05, 1.2, 1.05, ...] corresponding to input values.
-        """
         if not values: return []
-        
-        # Create a list of (index, value)
         indexed_values = sorted(enumerate(values), key=lambda x: x[1])
-        
         y_offsets = [base_y] * len(values)
-        
-        # Determine value range to normalize distance check
         val_range = max(values) - min(values)
         if val_range == 0: val_range = 1.0
         
-        # Iterate through sorted values and stack levels if too close
-        levels = [base_y] * len(values) # temporary storage for sorted
+        levels = [base_y] * len(values)
         current_level = base_y
         
         for i in range(1, len(indexed_values)):
             curr_val = indexed_values[i][1]
             prev_val = indexed_values[i-1][1]
-            
-            # Check normalized distance
             dist = (curr_val - prev_val) / val_range
             
             if dist < min_dist:
-                # If close to previous, bump up level
-                # Toggle between 2-3 levels: base, base+0.15, base+0.3
                 prev_level = levels[i-1]
                 if prev_level == base_y:
                     current_level = base_y + 0.15
                 elif prev_level == base_y + 0.15:
                     current_level = base_y + 0.3
                 else:
-                    current_level = base_y # Reset if stack gets too high
+                    current_level = base_y
             else:
                 current_level = base_y
             
             levels[i] = current_level
             
-        # Map back to original indices
         final_offsets = [0.0] * len(values)
         for i, (orig_idx, _) in enumerate(indexed_values):
             final_offsets[orig_idx] = levels[i]
@@ -541,6 +499,7 @@ class PortfolioAnalyzer:
         return final_offsets
 
 class PortfolioDiagnosticEngine:
+    # 🔻修正: ハードコードされたテキストを get_text() による辞書参照に変更
     @staticmethod
     def generate_report(weights_dict, pca_ratio, port_ret, benchmark_ret=None, lang='ja'):
         report = {
@@ -552,63 +511,43 @@ class PortfolioDiagnosticEngine:
         
         num_assets = len(weights_dict)
         
-        if lang == 'ja' or lang == 'JA':
-            if num_assets == 1:
-                report["type"] = "🏹 集中投資 (スナイパー型)"
-                report["diversification_comment"] = "分散効果はゼロです。すべての卵を一つのカゴに入れています。"
-                report["risk_comment"] = "⚠️ 個別銘柄リスクを最大限に負っています。"
-                report["action_plan"] = "少なくとも3〜5つの相関の低い資産に分散することを推奨します。"
-            else:
-                if pca_ratio >= 0.85:
-                    report["type"] = "⚠️ 見せかけの分散 (フェイク・ダイバーシフィケーション)"
-                    report["diversification_comment"] = f"変動の{pca_ratio*100:.1f}%が単一の要因（市場全体など）で説明されてしまいます。"
-                    report["risk_comment"] = "市場暴落時に、保有資産すべてが同時に下落するリスクが高い状態です。"
-                    report["action_plan"] = "株式以外の資産（債券、ゴールドなど）を追加し、リスク要因を分散してください。"
-                elif pca_ratio <= 0.60:
-                    report["type"] = "🏰 要塞型 (フォートレス)"
-                    report["diversification_comment"] = f"メイン要因による説明率は{pca_ratio*100:.1f}%に留まり、独自の動きをする資産が組み込まれています。"
-                    report["risk_comment"] = "無駄なリスクが効果的に分散され、防御力が高いポートフォリオです。"
-                    report["action_plan"] = "現在のバランスは非常に良好です。リバランスを行い維持しましょう。"
-                else:
-                    report["type"] = "⚖️ バランス型"
-                    report["diversification_comment"] = f"市場連動性は{pca_ratio*100:.1f}%で、標準的な分散レベルです。"
-                    report["risk_comment"] = "市場平均と同程度のリスク・リターン特性を持つ可能性が高いです。"
-                    report["action_plan"] = "より防御力を高めるなら、債券比率の調整やオルタナティブ資産の検討が有効です。"
+        if num_assets == 1:
+            report["type"] = get_text('diag_sniper_type', lang)
+            report["diversification_comment"] = get_text('diag_sniper_div', lang)
+            report["risk_comment"] = get_text('diag_sniper_risk', lang)
+            report["action_plan"] = get_text('diag_sniper_act', lang)
         else:
-            if num_assets == 1:
-                report["type"] = "🏹 Concentrated (Sniper)"
-                report["diversification_comment"] = "Zero diversification effect. All eggs are in one basket."
-                report["risk_comment"] = "⚠️ Maximum specific stock risk."
-                report["action_plan"] = "We recommend diversifying into at least 3-5 assets with low correlation."
+            if pca_ratio >= 0.85:
+                report["type"] = get_text('diag_fake_type', lang)
+                report["diversification_comment"] = get_text('diag_fake_div', lang).format(pca_ratio=pca_ratio*100)
+                report["risk_comment"] = get_text('diag_fake_risk', lang)
+                report["action_plan"] = get_text('diag_fake_act', lang)
+            elif pca_ratio <= 0.60:
+                report["type"] = get_text('diag_fortress_type', lang)
+                report["diversification_comment"] = get_text('diag_fortress_div', lang).format(pca_ratio=pca_ratio*100)
+                report["risk_comment"] = get_text('diag_fortress_risk', lang)
+                report["action_plan"] = get_text('diag_fortress_act', lang)
             else:
-                if pca_ratio >= 0.85:
-                    report["type"] = "⚠️ Fake Diversification"
-                    report["diversification_comment"] = f"{pca_ratio*100:.1f}% of variance is explained by a single factor."
-                    report["risk_comment"] = "High risk of all assets dropping simultaneously during a market crash."
-                    report["action_plan"] = "Add non-equity assets (bonds, gold, etc.) to diversify risk factors."
-                elif pca_ratio <= 0.60:
-                    report["type"] = "🏰 Fortress"
-                    report["diversification_comment"] = f"Main factor explains only {pca_ratio*100:.1f}%. Contains assets with unique movements."
-                    report["risk_comment"] = "Unnecessary risks are effectively diversified. Highly defensive portfolio."
-                    report["action_plan"] = "Current balance is excellent. Maintain via periodic rebalancing."
-                else:
-                    report["type"] = "⚖️ Balanced"
-                    report["diversification_comment"] = f"Market correlation is {pca_ratio*100:.1f}%, a standard diversification level."
-                    report["risk_comment"] = "Likely has risk/return characteristics similar to the market average."
-                    report["action_plan"] = "To increase defense, consider adjusting bond ratios or adding alternative assets."
+                report["type"] = get_text('diag_balanced_type', lang)
+                report["diversification_comment"] = get_text('diag_balanced_div', lang).format(pca_ratio=pca_ratio*100)
+                report["risk_comment"] = get_text('diag_balanced_risk', lang)
+                report["action_plan"] = get_text('diag_balanced_act', lang)
 
         return report
 
     @staticmethod
     def get_skew_kurt_desc(port_ret, lang='ja'):
         if port_ret.empty: 
-            return "データ不足です。" if lang == 'ja' or lang == 'JA' else "Insufficient data."
+            return get_text('no_data', lang)
             
+        # (※ 歪度・尖度の詳しい説明文が必要な場合は、辞書に追加して呼び出します。
+        # 今回は一旦、既存の動きを維持しつつ、PDFなど主要なものに影響しないため
+        # 英語か日本語かで簡易的に切り替える元のロジックを保持しています)
         skew = port_ret.skew()
         kurt = port_ret.kurt()
         desc = []
         
-        if lang == 'ja' or lang == 'JA':
+        if str(lang).upper() == 'JA':
             if skew < -0.5: desc.append("⚠️ 負の歪度: 通常時は安定していますが、稀に大きな急落が起きるリスクがあります（コツコツドカン型）。")
             elif skew > 0.5: desc.append("✅ 正の歪度: 損失は限定的ですが、稀に大きな利益が出る可能性があります。")
             if kurt > 2.0: desc.append("⚠️ ファットテール: 正規分布に比べて「極端な事象（暴騰・暴落）」が発生する確率が高い状態です。")
@@ -621,56 +560,39 @@ class PortfolioDiagnosticEngine:
 
     @staticmethod
     def generate_factor_report(params, lang='ja'):
-        """Translate Factor Analysis (Now supports 5 factors)."""
+        """Translate Factor Analysis using i18n dictionary."""
         if params is None: 
-            return "データなし" if lang == 'ja' or lang == 'JA' else "No Data"
+            return get_text('no_data', lang)
         
         comments = []
         
         hml = params.get('HML', 0)
         smb = params.get('SMB', 0)
         mkt = params.get('Mkt-RF', 1.0)
-        # 🔻追加: RMWとCMAの取得
         rmw = params.get('RMW', 0)
         cma = params.get('CMA', 0)
         
-        if lang == 'ja' or lang == 'JA':
-            # 1. HML
-            if hml > 0.15: comments.append("✅ **バリュー株選好:** 割安株や高配当株との連動性が高いです。")
-            elif hml < -0.15: comments.append("🚀 **グロース株選好:** 成長株やハイテク株との連動性が高いです。")
-            else: comments.append("⚖️ **スタイル中立:** バリューとグロースのバランスが取れています。")
-            # 2. SMB
-            if smb > 0.15: comments.append("🐣 **小型株バイアス:** 変動は大きいですが、将来の成長余地を取りに行っています。")
-            elif smb < -0.15: comments.append("🐘 **大型株バイアス:** 安定した大企業中心の構成です。")
-            # 3. Mkt-RF
-            if mkt > 1.1: comments.append("🎢 **ハイベータ（積極運用）:** 市場平均よりも大きく動く、攻撃的な構成です。")
-            elif mkt < 0.9: comments.append("🛡️ **ローベータ（守りの運用）:** 市場下落時にも比較的ダメージを受けにくい構成です。")
+        # 1. HML
+        if hml > 0.15: comments.append(get_text('factor_hml_val', lang))
+        elif hml < -0.15: comments.append(get_text('factor_hml_gro', lang))
+        else: comments.append(get_text('factor_hml_neu', lang))
+        
+        # 2. SMB
+        if smb > 0.15: comments.append(get_text('factor_smb_sma', lang))
+        elif smb < -0.15: comments.append(get_text('factor_smb_lar', lang))
+        
+        # 3. Mkt-RF
+        if mkt > 1.1: comments.append(get_text('factor_mkt_high', lang))
+        elif mkt < 0.9: comments.append(get_text('factor_mkt_low', lang))
+        
+        # 4. RMW
+        if 'RMW' in params.index:
+            if rmw > 0.15: comments.append(get_text('factor_rmw_high', lang))
+            elif rmw < -0.15: comments.append(get_text('factor_rmw_low', lang))
             
-            # 🔻追加: 新ファクターの診断 (JA)
-            if 'RMW' in params.index:
-                if rmw > 0.15: comments.append("💎 **クオリティ重視 (RMW):** 収益性が高く、財務が堅牢な企業を好む傾向があります。")
-                elif rmw < -0.15: comments.append("⚠️ **低収益バイアス (RMW):** 収益性が低い、または赤字の企業が多く含まれています。")
-            if 'CMA' in params.index:
-                if cma > 0.15: comments.append("🐢 **保守的投資 (CMA):** 設備投資に慎重で、手堅い経営を行う企業に偏っています。")
-                elif cma < -0.15: comments.append("🔥 **積極的投資 (CMA):** 成長のための設備投資を積極的に行う企業を好んでいます。")
-        else:
-            # 1. HML
-            if hml > 0.15: comments.append("✅ **Value Bias:** Highly correlated with undervalued or high-dividend stocks.")
-            elif hml < -0.15: comments.append("🚀 **Growth Bias:** Highly correlated with growth or tech stocks.")
-            else: comments.append("⚖️ **Style Neutral:** Balanced between value and growth.")
-            # 2. SMB
-            if smb > 0.15: comments.append("🐣 **Small Cap Bias:** High volatility, aiming for future growth potential.")
-            elif smb < -0.15: comments.append("🐘 **Large Cap Bias:** Centered around stable, large enterprises.")
-            # 3. Mkt-RF
-            if mkt > 1.1: comments.append("🎢 **High Beta (Aggressive):** Moves more than the market average.")
-            elif mkt < 0.9: comments.append("🛡️ **Low Beta (Defensive):** Relatively resilient during market downturns.")
-            
-            # 🔻追加: 新ファクターの診断 (EN)
-            if 'RMW' in params.index:
-                if rmw > 0.15: comments.append("💎 **Quality Focus (RMW):** Preference for highly profitable firms with robust financials.")
-                elif rmw < -0.15: comments.append("⚠️ **Low Profitability Bias (RMW):** Exposure to companies with weak profitability or deficits.")
-            if 'CMA' in params.index:
-                if cma > 0.15: comments.append("🐢 **Conservative Inv (CMA):** Leans towards firms cautious with capital expenditures.")
-                elif cma < -0.15: comments.append("🔥 **Aggressive Inv (CMA):** Favors firms aggressively investing for future growth.")
+        # 5. CMA
+        if 'CMA' in params.index:
+            if cma > 0.15: comments.append(get_text('factor_cma_high', lang))
+            elif cma < -0.15: comments.append(get_text('factor_cma_low', lang))
 
         return "\n".join(comments)
