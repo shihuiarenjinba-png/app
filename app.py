@@ -79,7 +79,32 @@ LANG_DICT = {
         'graph_dist': "月次リターンの分布 vs 正規分布",
         'graph_cost': "資産成長とコストの浸食イメージ (元本=1.0)",
         'currency_jpy': "円",
-        'currency_usd': "USD"
+        'currency_usd': "USD",
+        # 🔻追加: 多言語化用辞書拡充
+        'graph_alloc': "資産配分",
+        'graph_corr': "相関マトリックス",
+        'graph_hist': "過去データによるストレステスト",
+        'graph_dd': "ドローダウン推移",
+        'graph_attr_rel': "投資配分 vs 相対リスク寄与度",
+        'graph_attr_abs': "絶対リスク寄与度（数値）",
+        'graph_mc': "20年後の資産予測",
+        'label_principal': "元本",
+        'label_val': "評価額",
+        'label_final_val': "最終評価額",
+        'label_months': "経過年数",
+        'label_multiple': "倍率",
+        'label_ratio': "構成比 (%)",
+        'label_risk': "変動寄与量",
+        'factor_mkt': "市場感応度 (Beta)",
+        'factor_smb': "小型株効果 (SMB)",
+        'factor_hml': "バリュー効果 (HML)",
+        'factor_rmw': "収益性 (RMW)",
+        'factor_cma': "投資スタイル (CMA)",
+        'pca_pc1': "第1成分",
+        'pca_pc2': "第2成分",
+        'dist_ret': "月次リターン",
+        'dist_density': "密度",
+        'mc_freq': "頻度"
     },
     'EN': {
         'title': "🧬 Factor & Stress Test Simulator V18.1",
@@ -99,7 +124,32 @@ LANG_DICT = {
         'graph_dist': "Monthly Returns Dist vs Normal",
         'graph_cost': "Asset Growth & Cost Drag (Base=1.0)",
         'currency_jpy': "JPY",
-        'currency_usd': "USD"
+        'currency_usd': "USD",
+        # 🔻追加: 多言語化用辞書拡充
+        'graph_alloc': "Asset Allocation",
+        'graph_corr': "Correlation Matrix",
+        'graph_hist': "Historical Stress Test",
+        'graph_dd': "Drawdown Trajectory",
+        'graph_attr_rel': "Allocation vs Relative Risk Contribution",
+        'graph_attr_abs': "Absolute Risk Contribution",
+        'graph_mc': "20-Year Asset Projection",
+        'label_principal': "Principal",
+        'label_val': "Valuation",
+        'label_final_val': "Final Valuation",
+        'label_months': "Years Elapsed",
+        'label_multiple': "Multiple",
+        'label_ratio': "Allocation (%)",
+        'label_risk': "Risk Contribution",
+        'factor_mkt': "Market Beta",
+        'factor_smb': "Size (SMB)",
+        'factor_hml': "Value (HML)",
+        'factor_rmw': "Profitability (RMW)",
+        'factor_cma': "Investment (CMA)",
+        'pca_pc1': "PC1",
+        'pca_pc2': "PC2",
+        'dist_ret': "Monthly Return",
+        'dist_density': "Density",
+        'mc_freq': "Frequency"
     }
 }
 
@@ -309,7 +359,8 @@ if st.session_state.portfolio_data:
     # --- 2. 高度計算 & 分析レポート ---
     params, r_sq = analyzer.perform_factor_regression(port_ret, data['factors'])
     if params is not None:
-        factor_comment = PortfolioDiagnosticEngine.generate_factor_report(params)
+        # 🔻重要: エンジンに言語設定を渡して多言語化
+        factor_comment = PortfolioDiagnosticEngine.generate_factor_report(params, lang=st.session_state.lang)
     else:
         factor_comment = "ファクターデータが不足しており分析できません。"
 
@@ -329,7 +380,8 @@ if st.session_state.portfolio_data:
 
     # AI診断 & PCA
     pca_ratio, _ = analyzer.perform_pca(data['components'])
-    report = PortfolioDiagnosticEngine.generate_report(data['weights'], pca_ratio, port_ret)
+    # 🔻重要: エンジンに言語設定を渡して多言語化
+    report = PortfolioDiagnosticEngine.generate_report(data['weights'], pca_ratio, port_ret, lang=st.session_state.lang)
 
     # ▼ 詳細レビュー生成 (日本語版) ▼
     detailed_review = []
@@ -447,13 +499,15 @@ if st.session_state.portfolio_data:
                     fig_pca = px.scatter(x=pca_coords[:, 0], y=pca_coords[:, 1], text=labels, 
                                          color=labels, title=t('graph_pca'))
                     fig_pca.update_traces(textposition='top center', marker=dict(size=12))
-                    fig_pca.update_layout(xaxis_title="第1成分", yaxis_title="第2成分", showlegend=False)
+                    # 🔻修正: 軸ラベルの多言語化
+                    fig_pca.update_layout(xaxis_title=t('pca_pc1'), yaxis_title=t('pca_pc2'), showlegend=False)
                     st.plotly_chart(fig_pca, use_container_width=True)
             except Exception as e:
                 st.warning(f"PCA散布図の描画エラー: {e}")
 
         with c2:
-            st.subheader("資産配分")
+            # 🔻修正: グラフタイトルの多言語化
+            st.subheader(t('graph_alloc'))
             fig_pie = px.pie(values=list(data['weights'].values()), names=list(data['weights'].keys()), hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
             st.plotly_chart(fig_pie, use_container_width=True)
             figs_for_report['allocation'] = fig_pie
@@ -472,7 +526,8 @@ if st.session_state.portfolio_data:
         
         if fig_corr_report:
             st.markdown("---")
-            st.markdown("#### 🔥 相関マトリックス")
+            # 🔻修正: グラフタイトルの多言語化
+            st.markdown(f"#### 🔥 {t('graph_corr')}")
             num_assets = len(data['components'].columns)
             corr_height = max(400, 200 + (num_assets * 30))
             fig_corr_report.update_layout(height=corr_height)
@@ -512,14 +567,19 @@ if st.session_state.portfolio_data:
             if not rolling_betas.empty:
                 fig_roll = go.Figure()
                 cols = rolling_betas.columns
+                # 🔻修正: 凡例の多言語化 & 5ファクター枠(RMW, CMA)の追加
                 if 'Mkt-RF' in cols: 
-                    fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas['Mkt-RF'], name='市場感応度 (Beta)', line=dict(width=3, color=COLORS['main'])))
+                    fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas['Mkt-RF'], name=t('factor_mkt'), line=dict(width=3, color=COLORS['main'])))
                 if 'SMB' in cols: 
-                    fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas['SMB'], name='小型株効果 (SMB)', line=dict(dash='dot', color='orange')))
+                    fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas['SMB'], name=t('factor_smb'), line=dict(dash='dot', color='orange')))
                 if 'HML' in cols: 
-                    fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas['HML'], name='バリュー効果 (HML)', line=dict(dash='dot', color='yellow')))
-                
-                if not any(x in cols for x in ['Mkt-RF', 'SMB', 'HML']):
+                    fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas['HML'], name=t('factor_hml'), line=dict(dash='dot', color='yellow')))
+                if 'RMW' in cols: 
+                    fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas['RMW'], name=t('factor_rmw'), line=dict(dash='dot', color='#00FF00'))) # Neon Green
+                if 'CMA' in cols: 
+                    fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas['CMA'], name=t('factor_cma'), line=dict(dash='dot', color='#FF00FF'))) # Magenta
+
+                if not any(x in cols for x in ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA']):
                     for c in cols:
                         fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas[c], name=c))
 
@@ -529,10 +589,11 @@ if st.session_state.portfolio_data:
                 st.info("ローリング分析には少なくとも12ヶ月以上のデータが必要です。")
 
     with tabs[2]:
-        st.subheader("過去データによるストレステスト")
+        # 🔻修正: グラフタイトルや凡例の多言語化
+        st.subheader(t('graph_hist'))
         cum_ret = (1 + port_ret).cumprod() * 10000
         fig_hist = go.Figure()
-        fig_hist.add_trace(go.Scatter(x=cum_ret.index, y=[10000]*len(cum_ret), mode='lines', name='元本 (10,000)', line=dict(color=COLORS['principal'], width=1, dash='dot')))
+        fig_hist.add_trace(go.Scatter(x=cum_ret.index, y=[10000]*len(cum_ret), mode='lines', name=f"{t('label_principal')} (10,000)", line=dict(color=COLORS['principal'], width=1, dash='dot')))
 
         if not bench_ret.empty:
             bench_cum = (1 + bench_ret).cumprod()
@@ -548,7 +609,7 @@ if st.session_state.portfolio_data:
         fig_dd = go.Figure()
         dd_series = (cum_ret / cum_ret.cummax() - 1)
         fig_dd.add_trace(go.Scatter(x=dd_series.index, y=dd_series, fill='tozeroy', name='Drawdown', line=dict(color='red')))
-        fig_dd.update_layout(title="ドローダウン推移")
+        fig_dd.update_layout(title=t('graph_dd'))
         st.plotly_chart(fig_dd, use_container_width=True)
         figs_for_report['drawdown'] = fig_dd
 
@@ -571,7 +632,7 @@ if st.session_state.portfolio_data:
             y_norm = (1 / (np.sqrt(2 * np.pi) * std)) * np.exp(-0.5 * ((x_range - mu) / std) ** 2)
             fig_dist.add_trace(go.Scatter(x=x_range, y=y_norm, mode='lines', name='正規分布 (理論値)', line=dict(color='white', dash='dash', width=2)))
         
-        fig_dist.update_layout(title=t('graph_dist'), xaxis_title="月次リターン", yaxis_title="密度", height=400)
+        fig_dist.update_layout(title=t('graph_dist'), xaxis_title=t('dist_ret'), yaxis_title=t('dist_density'), height=400)
         st.plotly_chart(fig_dist, use_container_width=True)
 
     with tabs[3]:
@@ -611,7 +672,8 @@ if st.session_state.portfolio_data:
                 fillcolor='rgba(255, 99, 71, 0.3)'
             ))
             
-            fig_cost.update_layout(title=t('graph_cost'), xaxis_title="経過年数", yaxis_title="倍率")
+            # 🔻修正: 軸ラベルの多言語化
+            fig_cost.update_layout(title=t('graph_cost'), xaxis_title=t('label_months'), yaxis_title=t('label_multiple'))
             st.plotly_chart(fig_cost, use_container_width=True)
             
         with c2:
@@ -653,10 +715,11 @@ if st.session_state.portfolio_data:
             ))
             
             dynamic_height = max(400, 100 + (len(w_aligned) * 30))
+            # 🔻修正: 軸ラベルとタイトルの多言語化
             fig_rel.update_layout(
                 barmode='group', 
-                title="投資配分 vs 相対リスク寄与度",
-                xaxis_title="構成比 (%)",
+                title=t('graph_attr_rel'),
+                xaxis_title=t('label_ratio'),
                 yaxis={'categoryorder':'total ascending'},
                 height=dynamic_height
             )
@@ -672,9 +735,10 @@ if st.session_state.portfolio_data:
                 name='絶対リスク寄与', orientation='h', 
                 marker_color='#FF6347'
             ))
+            # 🔻修正: 軸ラベルとタイトルの多言語化
             fig_abs.update_layout(
-                title="絶対リスク寄与度（数値）",
-                xaxis_title="変動寄与量",
+                title=t('graph_attr_abs'),
+                xaxis_title=t('label_risk'),
                 yaxis={'categoryorder':'total ascending'},
                 height=dynamic_height
             )
@@ -690,8 +754,8 @@ if st.session_state.portfolio_data:
             fig_mc.add_trace(go.Scatter(x=df_stats.index, y=df_stats['p10'], mode='lines', name='下位 10% (悲観)', line=dict(color=COLORS['p10'], width=1, dash='dot')))
             fig_mc.add_trace(go.Scatter(x=df_stats.index, y=df_stats['p90'], mode='lines', name='上位 10% (楽観)', line=dict(color=COLORS['p90'], width=1, dash='dot')))
             
-            # 🌍 基準通貨の適用
-            fig_mc.update_layout(title=f"20年後の資産予測 (元本: {init_inv:,} {curr_unit})", yaxis_title=f"評価額 ({curr_unit})", height=500)
+            # 🌍 🔻修正: タイトルと軸ラベルの多言語化
+            fig_mc.update_layout(title=f"{t('graph_mc')} ({t('label_principal')}: {init_inv:,} {curr_unit})", yaxis_title=f"{t('label_val')} ({curr_unit})", height=500)
             st.plotly_chart(fig_mc, use_container_width=True)
             figs_for_report['monte_carlo'] = fig_mc
 
@@ -729,9 +793,9 @@ if st.session_state.portfolio_data:
                     text=label, showarrow=False, font=dict(color=color)
                 )
 
-            # 🌍 基準通貨の適用
+            # 🌍 🔻修正: 軸ラベルの多言語化
             fig_mc_hist.update_layout(
-                xaxis_title=f"最終評価額 ({curr_unit})", yaxis_title="頻度", showlegend=False,
+                xaxis_title=f"{t('label_final_val')} ({curr_unit})", yaxis_title=t('mc_freq'), showlegend=False,
                 xaxis=dict(range=[0, x_max_view]), 
                 yaxis=dict(range=[0, y_max_freq * 1.4])
             )
