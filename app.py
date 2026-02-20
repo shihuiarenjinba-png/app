@@ -168,13 +168,15 @@ with st.sidebar:
     st.markdown("### 4. アドバイザーコメント")
     st.caption("✍️ PDFレポートの冒頭に掲載されるメッセージです。")
     
-    default_note = "今回の分析結果に基づき、成長と安定のバランスを重視したこの配分を推奨します。リスク許容度に合わせて定期的なリバランスを行ってください。"
+    # 🔻修正: アドバイザーメッセージの初期値を多言語辞書から呼び出し
+    default_note = t('default_advisor_note')
     advisor_note = st.text_area("クライアントへのメッセージ:", 
                                 value=default_note,
                                 height=100)
 
     st.markdown("---")
-    analyze_btn = st.button(t('btn_analyze'), type="primary", use_container_width=True)
+    # 🔻修正: use_container_width=True を width="stretch" に変更
+    analyze_btn = st.button(t('btn_analyze'), type="primary", width="stretch")
 
 # =========================================================
 # 🚀 メインロジック (計算実行)
@@ -396,7 +398,8 @@ if st.session_state.portfolio_data:
                          'steps': [{'range': [0, 60], 'color': "#333"}, {'range': [60, 100], 'color': "#555"}],
                          'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 85}}
             ))
-            st.plotly_chart(fig_gauge, use_container_width=True)
+            # 🔻修正: use_container_width=True を width="stretch" に変更
+            st.plotly_chart(fig_gauge, width="stretch")
             
             st.markdown("#### 🧭 資産クラスターマップ (PCA)")
             try:
@@ -410,14 +413,16 @@ if st.session_state.portfolio_data:
                                          color=labels, title=t('graph_pca'))
                     fig_pca.update_traces(textposition='top center', marker=dict(size=12))
                     fig_pca.update_layout(xaxis_title=t('pca_pc1'), yaxis_title=t('pca_pc2'), showlegend=False)
-                    st.plotly_chart(fig_pca, use_container_width=True)
+                    # 🔻修正: use_container_width=True を width="stretch" に変更
+                    st.plotly_chart(fig_pca, width="stretch")
             except Exception as e:
                 st.warning(f"PCA散布図の描画エラー: {e}")
 
         with c2:
             st.subheader(t('graph_alloc'))
             fig_pie = px.pie(values=list(data['weights'].values()), names=list(data['weights'].keys()), hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            # 🔻修正: use_container_width=True を width="stretch" に変更
+            st.plotly_chart(fig_pie, width="stretch")
             figs_for_report['allocation'] = fig_pie
             
             st.markdown("---")
@@ -438,7 +443,8 @@ if st.session_state.portfolio_data:
             num_assets = len(data['components'].columns)
             corr_height = max(400, 200 + (num_assets * 30))
             fig_corr_report.update_layout(height=corr_height)
-            st.plotly_chart(fig_corr_report, use_container_width=True)
+            # 🔻修正: use_container_width=True を width="stretch" に変更
+            st.plotly_chart(fig_corr_report, width="stretch")
 
     with tabs[1]:
         if data['factors'].empty:
@@ -455,7 +461,8 @@ if st.session_state.portfolio_data:
                         marker_color=colors, text=[f"{x:.2f}" for x in beta_df.values], textposition='auto'
                     ))
                     fig_beta.update_layout(title=t('graph_beta'), xaxis_title="感応度", height=300)
-                    st.plotly_chart(fig_beta, use_container_width=True)
+                    # 🔻修正: use_container_width=True を width="stretch" に変更
+                    st.plotly_chart(fig_beta, width="stretch")
                     st.caption(f"決定係数 (R²): {r_sq:.2%} (モデル説明力)")
                     figs_for_report['factors'] = fig_beta
                 
@@ -490,7 +497,8 @@ if st.session_state.portfolio_data:
                         fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas[c], name=c))
 
                 fig_roll.update_layout(title=t('graph_roll'), yaxis_title="Beta", height=400)
-                st.plotly_chart(fig_roll, use_container_width=True)
+                # 🔻修正: use_container_width=True を width="stretch" に変更
+                st.plotly_chart(fig_roll, width="stretch")
             else:
                 st.info("ローリング分析には少なくとも12ヶ月以上のデータが必要です。")
 
@@ -508,14 +516,16 @@ if st.session_state.portfolio_data:
             fig_hist.add_trace(go.Scatter(x=bench_cum.index, y=bench_cum, mode='lines', name=f"ベンチマーク ({data['bench_name']})", line=dict(color=COLORS['benchmark'], width=1.5)))
 
         fig_hist.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret, fill='tozeroy', fillcolor=COLORS['bg_fill'], mode='lines', name='ポートフォリオ', line=dict(color=COLORS['main'], width=2.5)))
-        st.plotly_chart(fig_hist, use_container_width=True)
+        # 🔻修正: use_container_width=True を width="stretch" に変更
+        st.plotly_chart(fig_hist, width="stretch")
         figs_for_report['cumulative'] = fig_hist
 
         fig_dd = go.Figure()
         dd_series = (cum_ret / cum_ret.cummax() - 1)
         fig_dd.add_trace(go.Scatter(x=dd_series.index, y=dd_series, fill='tozeroy', name='Drawdown', line=dict(color='red')))
         fig_dd.update_layout(title=t('graph_dd'))
-        st.plotly_chart(fig_dd, use_container_width=True)
+        # 🔻修正: use_container_width=True を width="stretch" に変更
+        st.plotly_chart(fig_dd, width="stretch")
         figs_for_report['drawdown'] = fig_dd
 
         st.markdown("---")
@@ -538,7 +548,8 @@ if st.session_state.portfolio_data:
             fig_dist.add_trace(go.Scatter(x=x_range, y=y_norm, mode='lines', name='正規分布 (理論値)', line=dict(color='white', dash='dash', width=2)))
         
         fig_dist.update_layout(title=t('graph_dist'), xaxis_title=t('dist_ret'), yaxis_title=t('dist_density'), height=400)
-        st.plotly_chart(fig_dist, use_container_width=True)
+        # 🔻修正: use_container_width=True を width="stretch" に変更
+        st.plotly_chart(fig_dist, width="stretch")
 
     with tabs[3]:
         st.subheader("コストによるリターン低下分析 (20年シミュレーション)")
@@ -578,7 +589,8 @@ if st.session_state.portfolio_data:
             ))
             
             fig_cost.update_layout(title=t('graph_cost'), xaxis_title=t('label_months'), yaxis_title=t('label_multiple'))
-            st.plotly_chart(fig_cost, use_container_width=True)
+            # 🔻修正: use_container_width=True を width="stretch" に変更
+            st.plotly_chart(fig_cost, width="stretch")
             
         with c2:
             st.error(f"💸 失われる価値: ▲{loss_amount:,.0f} {curr_unit}")
@@ -626,7 +638,8 @@ if st.session_state.portfolio_data:
                 yaxis={'categoryorder':'total ascending'},
                 height=dynamic_height
             )
-            st.plotly_chart(fig_rel, use_container_width=True)
+            # 🔻修正: use_container_width=True を width="stretch" に変更
+            st.plotly_chart(fig_rel, width="stretch")
             
             # --- グラフB: 絶対評価 (変動リスク確認用) ---
             st.markdown("#### B. 絶対リスク寄与度（実際の変動量）")
@@ -644,7 +657,8 @@ if st.session_state.portfolio_data:
                 yaxis={'categoryorder':'total ascending'},
                 height=dynamic_height
             )
-            st.plotly_chart(fig_abs, use_container_width=True)
+            # 🔻修正: use_container_width=True を width="stretch" に変更
+            st.plotly_chart(fig_abs, width="stretch")
 
             figs_for_report['attribution'] = fig_rel
 
@@ -657,7 +671,8 @@ if st.session_state.portfolio_data:
             fig_mc.add_trace(go.Scatter(x=df_stats.index, y=df_stats['p90'], mode='lines', name='上位 10% (楽観)', line=dict(color=COLORS['p90'], width=1, dash='dot')))
             
             fig_mc.update_layout(title=f"{t('graph_mc')} ({t('label_principal')}: {init_inv:,} {curr_unit})", yaxis_title=f"{t('label_val')} ({curr_unit})", height=500)
-            st.plotly_chart(fig_mc, use_container_width=True)
+            # 🔻修正: use_container_width=True を width="stretch" に変更
+            st.plotly_chart(fig_mc, width="stretch")
             figs_for_report['monte_carlo'] = fig_mc
 
             st.markdown("### 🏁 最終評価額の分布")
@@ -699,7 +714,8 @@ if st.session_state.portfolio_data:
                 xaxis=dict(range=[0, x_max_view]), 
                 yaxis=dict(range=[0, y_max_freq * 1.4])
             )
-            st.plotly_chart(fig_mc_hist, use_container_width=True)
+            # 🔻修正: use_container_width=True を width="stretch" に変更
+            st.plotly_chart(fig_mc_hist, width="stretch")
             
             st.success(f"✅ シミュレーション完了: **7,500 シナリオ** を生成しました。")
 
