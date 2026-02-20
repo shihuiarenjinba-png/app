@@ -8,10 +8,80 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib import colors
 
+# =========================================================
+# 🌍 PDF用 多言語翻訳辞書 (Step 2 追加)
+# =========================================================
+PDF_LANG_DICT = {
+    'JA': {
+        'title': "ポートフォリオ詳細分析レポート",
+        'date': "作成日: ",
+        'ch1_title': "1. 分析サマリー",
+        'summary_text': """
+        本ポートフォリオの年平均成長率(CAGR)は <b>{cagr}</b>、
+        リスク(Volatility)は <b>{vol}</b> です。
+        シャープレシオは <b>{sharpe}</b> を記録しており、
+        最大ドローダウンは <b>{maxdd}</b> と予測されます。
+        """,
+        'mc_stats': "<b>将来シミュレーション(20年後):</b> ",
+        'ch2_title': "2. AI ポートフォリオ診断",
+        'diag_type': "タイプ判定",
+        'diag_div': "分散状況",
+        'diag_risk': "リスク評価",
+        'diag_action': "アクションプラン",
+        'factor_title': "<b>▼ ファクター特性分析</b>",
+        'ch3_title': "3. 詳細チャート分析",
+        'ch3_desc': "以下に主要な分析チャートを示します。",
+        'plot_err': "※グラフ生成エラー: ",
+        'title_map': {
+            'allocation': '■ 資産配分 (Allocation)',
+            'correlation': '■ 相関マトリックス (Correlation)',
+            'monte_carlo': '■ 将来シミュレーション (Monte Carlo)',
+            'cumulative': '■ 累積リターン推移 (Cumulative Return)',
+            'drawdown': '■ ドローダウン (Drawdown)',
+            'factors': '■ ファクター感応度 (Factor Exposure)',
+            'attribution': '■ 寄与度分析 (Attribution)'
+        }
+    },
+    'EN': {
+        'title': "Portfolio Detailed Analysis Report",
+        'date': "Date: ",
+        'ch1_title': "1. Analysis Summary",
+        'summary_text': """
+        The portfolio's Compound Annual Growth Rate (CAGR) is <b>{cagr}</b>, 
+        and its risk (Volatility) is <b>{vol}</b>. 
+        It records a Sharpe Ratio of <b>{sharpe}</b>, 
+        with a maximum drawdown projected at <b>{maxdd}</b>.
+        """,
+        'mc_stats': "<b>Future Simulation (20 Years):</b> ",
+        'ch2_title': "2. AI Portfolio Diagnosis",
+        'diag_type': "Portfolio Type",
+        'diag_div': "Diversification",
+        'diag_risk': "Risk Assessment",
+        'diag_action': "Action Plan",
+        'factor_title': "<b>▼ Factor Characteristics Analysis</b>",
+        'ch3_title': "3. Detailed Chart Analysis",
+        'ch3_desc': "The following are the key analytical charts.",
+        'plot_err': "* Chart generation error: ",
+        'title_map': {
+            'allocation': '■ Asset Allocation',
+            'correlation': '■ Correlation Matrix',
+            'monte_carlo': '■ Monte Carlo Simulation',
+            'cumulative': '■ Cumulative Return',
+            'drawdown': '■ Drawdown',
+            'factors': '■ Factor Exposure',
+            'attribution': '■ Risk Attribution'
+        }
+    }
+}
+
 def create_pdf_report(payload, figs_dict):
     """
     app.py から受け取ったデータ(payload)とグラフ(figs_dict)を元にPDFを作成する
     """
+    # 言語設定の取得 (未指定時は 'JA')
+    lang = payload.get('lang', 'JA')
+    t = PDF_LANG_DICT.get(lang, PDF_LANG_DICT['JA'])
+
     buffer = io.BytesIO()
     
     # 1. ドキュメント設定
@@ -23,8 +93,8 @@ def create_pdf_report(payload, figs_dict):
         title="Portfolio Report"
     )
     
-    # 2. 日本語フォント登録 (パス取得ロジックを強化)
-    # このファイル(pdf_generator.py)と同じ階層にある ipaexg.ttf を探しに行きます
+    # 2. 日本語フォント登録 (ReportLab用: 本文の表示に必要)
+    # ※ここは既存の文字化け対策をそのまま完全に保持しています
     base_dir = os.path.dirname(os.path.abspath(__file__))
     font_filename = "ipaexg.ttf"
     font_path = os.path.join(base_dir, font_filename)
@@ -48,41 +118,30 @@ def create_pdf_report(payload, figs_dict):
     normal_style = ParagraphStyle('JpNormal', parent=styles['Normal'], fontName=font_name, fontSize=10.5, leading=16, spaceAfter=10)
     alert_style = ParagraphStyle('JpAlert', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14, textColor=colors.firebrick, spaceAfter=10)
     small_style = ParagraphStyle('JpSmall', parent=styles['Normal'], fontName=font_name, fontSize=9, leading=12, textColor=colors.gray, spaceAfter=5)
-    # メッセージ用の強調スタイルを追加
-    message_style = ParagraphStyle('JpMessage', parent=styles['Normal'], fontName=font_name, fontSize=10.5, leading=16, spaceAfter=10, backColor=colors.aliceblue, borderColor=colors.steelblue, borderWidth=1, borderPadding=10, borderRadius=5)
 
     # 4. コンテンツ構築
     story = []
 
     # --- ヘッダー ---
-    story.append(Paragraph("ポートフォリオ詳細分析レポート", title_style))
-    story.append(Paragraph(f"作成日: {payload.get('date', '-')}", normal_style))
+    story.append(Paragraph(t['title'], title_style))
+    story.append(Paragraph(f"{t['date']}{payload.get('date', '-')}", normal_style))
     story.append(Spacer(1, 20))
 
-    # --- 【追加】アドバイザーメッセージ ---
-    # app.py から送られてきた advisor_note があればここに表示
-    if 'advisor_note' in payload and payload['advisor_note']:
-        story.append(Paragraph("▼ アドバイザーからのメッセージ", heading_style))
-        # 改行コードを <br/> に変換して、複数行メッセージに対応
-        note_content = payload['advisor_note'].replace('\n', '<br/>')
-        story.append(Paragraph(note_content, message_style))
-        story.append(Spacer(1, 15))
-
     # --- 第1章: サマリー ---
-    story.append(Paragraph("1. 分析サマリー", heading_style))
+    story.append(Paragraph(t['ch1_title'], heading_style))
     
-    # 基本メトリクス
-    summary_text = f"""
-    本ポートフォリオの年平均成長率(CAGR)は <b>{payload['metrics']['CAGR']}</b>、
-    リスク(Volatility)は <b>{payload['metrics']['Vol']}</b> です。
-    シャープレシオは <b>{payload['metrics']['Sharpe']}</b> を記録しており、
-    最大ドローダウンは <b>{payload['metrics']['MaxDD']}</b> と予測されます。
-    """
+    # 基本メトリクス (言語ごとのフォーマットに代入)
+    summary_text = t['summary_text'].format(
+        cagr=payload['metrics']['CAGR'],
+        vol=payload['metrics']['Vol'],
+        sharpe=payload['metrics']['Sharpe'],
+        maxdd=payload['metrics']['MaxDD']
+    )
     story.append(Paragraph(summary_text, normal_style))
     
     # モンテカルロ統計 (あれば表示)
     if 'mc_stats' in payload:
-        story.append(Paragraph(f"<b>将来シミュレーション(20年後):</b> {payload['mc_stats']}", small_style))
+        story.append(Paragraph(f"{t['mc_stats']}{payload['mc_stats']}", small_style))
 
     # AI詳細レビュー
     if 'detailed_review' in payload:
@@ -93,39 +152,29 @@ def create_pdf_report(payload, figs_dict):
     story.append(Spacer(1, 10))
 
     # --- 第2章: AI診断 ---
-    story.append(Paragraph("2. AI ポートフォリオ診断", heading_style))
+    story.append(Paragraph(t['ch2_title'], heading_style))
     diag = payload.get('diagnosis', {})
     if diag:
-        story.append(Paragraph(f"<b>タイプ判定: {diag.get('type', '-')}</b>", normal_style))
-        story.append(Paragraph(f"分散状況: {diag.get('diversification_comment', '-')}", normal_style))
-        story.append(Paragraph(f"リスク評価: {diag.get('risk_comment', '-')}", alert_style))
-        story.append(Paragraph(f"アクションプラン: {diag.get('action_plan', '-')}", normal_style))
+        story.append(Paragraph(f"<b>{t['diag_type']}: {diag.get('type', '-')}</b>", normal_style))
+        story.append(Paragraph(f"{t['diag_div']}: {diag.get('diversification_comment', '-')}", normal_style))
+        story.append(Paragraph(f"{t['diag_risk']}: {diag.get('risk_comment', '-')}", alert_style))
+        story.append(Paragraph(f"{t['diag_action']}: {diag.get('action_plan', '-')}", normal_style))
 
     if 'factor_comment' in payload:
         story.append(Spacer(1, 10))
-        story.append(Paragraph("<b>▼ ファクター特性分析</b>", normal_style))
+        story.append(Paragraph(t['factor_title'], normal_style))
         story.append(Paragraph(payload['factor_comment'], normal_style))
 
     story.append(PageBreak())
 
     # --- 第3章: チャート ---
-    story.append(Paragraph("3. 詳細チャート分析", heading_style))
-    story.append(Paragraph("以下に主要な分析チャートを示します。", normal_style))
+    story.append(Paragraph(t['ch3_title'], heading_style))
+    story.append(Paragraph(t['ch3_desc'], normal_style))
     story.append(Spacer(1, 10))
 
     # グラフの表示順序とタイトル定義
-    # app.pyで生成されているキー: allocation, correlation, factors, cumulative, drawdown, attribution, monte_carlo
     plot_order = ['allocation', 'correlation', 'monte_carlo', 'cumulative', 'drawdown', 'factors', 'attribution']
-    
-    title_map = {
-        'allocation': '■ 資産配分 (Allocation)',
-        'correlation': '■ 相関マトリックス (Correlation)',
-        'monte_carlo': '■ 将来シミュレーション (Monte Carlo)',
-        'cumulative': '■ 累積リターン推移 (Cumulative Return)',
-        'drawdown': '■ ドローダウン (Drawdown)',
-        'factors': '■ ファクター感応度 (Factor Exposure)',
-        'attribution': '■ 寄与度分析 (Attribution)'
-    }
+    title_map = t['title_map']
 
     for key in plot_order:
         if key in figs_dict:
@@ -133,9 +182,26 @@ def create_pdf_report(payload, figs_dict):
             story.append(Paragraph(title_map.get(key, f"■ {key}"), heading_style))
             
             try:
-                # Plotly -> 画像変換
                 fig = figs_dict[key]
-                # 画像サイズ調整 (A4横幅に合わせるためwidth=800, scale=2などで高画質化して縮小表示)
+                
+                # -------------------------------------------------------
+                # 【重要修正】 グラフ画像のフォント設定 (言語で分岐)
+                # -------------------------------------------------------
+                if lang == 'JA':
+                    # 日本語環境: 既存の文字化け対策をそのまま使用
+                    fig.update_layout(
+                        font=dict(family="Noto Sans CJK JP, sans-serif"),
+                        title_font=dict(family="Noto Sans CJK JP, sans-serif")
+                    )
+                else:
+                    # 英語環境: 標準的な英字フォントを使用してスタイリッシュに
+                    fig.update_layout(
+                        font=dict(family="Arial, Helvetica, sans-serif"),
+                        title_font=dict(family="Arial, Helvetica, sans-serif")
+                    )
+                
+                # Plotly -> 画像変換
+                # 画像サイズ調整 (A4横幅に合わせるためwidth=900, scale=2などで高画質化して縮小表示)
                 img_bytes = fig.to_image(format="png", width=900, height=500, scale=2)
                 img_io = io.BytesIO(img_bytes)
                 
@@ -144,13 +210,13 @@ def create_pdf_report(payload, figs_dict):
                 story.append(im)
                 story.append(Spacer(1, 15))
                 
-                # ページ区切りの調整 (大きなグラフの後は改ページを入れると見やすい)
+                # ページ区切りの調整
                 if key in ['monte_carlo', 'drawdown', 'correlation']: 
                     story.append(PageBreak())
                     
             except Exception as e:
                 # 画像生成に失敗してもPDF作成自体は止めない
-                story.append(Paragraph(f"※グラフ生成エラー: {e}", alert_style))
+                story.append(Paragraph(f"{t['plot_err']}{e}", alert_style))
 
     try:
         doc.build(story)
