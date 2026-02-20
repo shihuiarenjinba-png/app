@@ -9,7 +9,7 @@ import pandas_datareader.data as web
 from datetime import datetime
 
 # =========================================================
-# 🛠️ Class Definitions (Brain: V18.2 - Multi-Currency & Multi-Lingual Enhanced)
+# 🛠️ Class Definitions (Brain: V18.3 - 5-Factor & Multi-Lingual)
 # =========================================================
 
 class MarketDataEngine:
@@ -70,13 +70,14 @@ class MarketDataEngine:
 
     @st.cache_data(ttl=3600*24*7)
     def fetch_french_factors(_self, region='US'):
-        """Fetch Fama-French Factors (Robust Fallback)."""
+        """Fetch Fama-French 5 Factors."""
         try:
-            name = 'F-F_Research_Data_Factors'
+            # 🔻修正: 5ファクターモデルへの変更
+            name = 'F-F_Research_Data_5_Factors_2x3'
             if region == 'Japan': 
-                name = 'Japan_3_Factors'
+                name = 'Japan_5_Factors' # ※注: DataReaderの仕様によっては要確認
             elif region == 'Global': 
-                name = 'Global_3_Factors'
+                name = 'Global_5_Factors'
 
             # Attempt to fetch data
             ff_data = web.DataReader(name, 'famafrench', start=_self.start_date, end=_self.end_date)[0]
@@ -90,7 +91,18 @@ class MarketDataEngine:
             
             return ff_data
         except Exception:
-            return pd.DataFrame()
+            # Fallback to 3 factors if 5 is not available (e.g. some regions)
+            try:
+                name = 'F-F_Research_Data_Factors'
+                if region == 'Japan': name = 'Japan_3_Factors'
+                elif region == 'Global': name = 'Global_3_Factors'
+                ff_data = web.DataReader(name, 'famafrench', start=_self.start_date, end=_self.end_date)[0]
+                ff_data = ff_data / 100.0
+                ff_data.index = ff_data.index.to_timestamp(freq='M')
+                if ff_data.index.tz is not None: ff_data.index = ff_data.index.tz_localize(None)
+                return ff_data
+            except Exception:
+                return pd.DataFrame()
 
     @st.cache_data(ttl=3600*24)
     def fetch_historical_prices(_self, tickers, base_currency='JPY'):
@@ -245,7 +257,8 @@ class PortfolioAnalyzer:
         if merged.empty: return None, None
         
         y = merged['y']
-        X_cols = [c for c in merged.columns if c in ['Mkt-RF', 'SMB', 'HML']]
+        # 🔻修正: 回帰分析の変数を5つに拡張 (存在するものだけを使用)
+        X_cols = [c for c in merged.columns if c in ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA']]
         if not X_cols: return None, None
         
         X = merged[X_cols]
@@ -539,7 +552,7 @@ class PortfolioDiagnosticEngine:
         
         num_assets = len(weights_dict)
         
-        if lang == 'ja':
+        if lang == 'ja' or lang == 'JA':
             if num_assets == 1:
                 report["type"] = "🏹 集中投資 (スナイパー型)"
                 report["diversification_comment"] = "分散効果はゼロです。すべての卵を一つのカゴに入れています。"
@@ -589,13 +602,13 @@ class PortfolioDiagnosticEngine:
     @staticmethod
     def get_skew_kurt_desc(port_ret, lang='ja'):
         if port_ret.empty: 
-            return "データ不足です。" if lang == 'ja' else "Insufficient data."
+            return "データ不足です。" if lang == 'ja' or lang == 'JA' else "Insufficient data."
             
         skew = port_ret.skew()
         kurt = port_ret.kurt()
         desc = []
         
-        if lang == 'ja':
+        if lang == 'ja' or lang == 'JA':
             if skew < -0.5: desc.append("⚠️ 負の歪度: 通常時は安定していますが、稀に大きな急落が起きるリスクがあります（コツコツドカン型）。")
             elif skew > 0.5: desc.append("✅ 正の歪度: 損失は限定的ですが、稀に大きな利益が出る可能性があります。")
             if kurt > 2.0: desc.append("⚠️ ファットテール: 正規分布に比べて「極端な事象（暴騰・暴落）」が発生する確率が高い状態です。")
@@ -608,17 +621,20 @@ class PortfolioDiagnosticEngine:
 
     @staticmethod
     def generate_factor_report(params, lang='ja'):
-        """Translate Factor Analysis."""
+        """Translate Factor Analysis (Now supports 5 factors)."""
         if params is None: 
-            return "データなし" if lang == 'ja' else "No Data"
+            return "データなし" if lang == 'ja' or lang == 'JA' else "No Data"
         
         comments = []
         
         hml = params.get('HML', 0)
         smb = params.get('SMB', 0)
         mkt = params.get('Mkt-RF', 1.0)
+        # 🔻追加: RMWとCMAの取得
+        rmw = params.get('RMW', 0)
+        cma = params.get('CMA', 0)
         
-        if lang == 'ja':
+        if lang == 'ja' or lang == 'JA':
             # 1. HML
             if hml > 0.15: comments.append("✅ **バリュー株選好:** 割安株や高配当株との連動性が高いです。")
             elif hml < -0.15: comments.append("🚀 **グロース株選好:** 成長株やハイテク株との連動性が高いです。")
@@ -629,6 +645,14 @@ class PortfolioDiagnosticEngine:
             # 3. Mkt-RF
             if mkt > 1.1: comments.append("🎢 **ハイベータ（積極運用）:** 市場平均よりも大きく動く、攻撃的な構成です。")
             elif mkt < 0.9: comments.append("🛡️ **ローベータ（守りの運用）:** 市場下落時にも比較的ダメージを受けにくい構成です。")
+            
+            # 🔻追加: 新ファクターの診断 (JA)
+            if 'RMW' in params.index:
+                if rmw > 0.15: comments.append("💎 **クオリティ重視 (RMW):** 収益性が高く、財務が堅牢な企業を好む傾向があります。")
+                elif rmw < -0.15: comments.append("⚠️ **低収益バイアス (RMW):** 収益性が低い、または赤字の企業が多く含まれています。")
+            if 'CMA' in params.index:
+                if cma > 0.15: comments.append("🐢 **保守的投資 (CMA):** 設備投資に慎重で、手堅い経営を行う企業に偏っています。")
+                elif cma < -0.15: comments.append("🔥 **積極的投資 (CMA):** 成長のための設備投資を積極的に行う企業を好んでいます。")
         else:
             # 1. HML
             if hml > 0.15: comments.append("✅ **Value Bias:** Highly correlated with undervalued or high-dividend stocks.")
@@ -640,5 +664,13 @@ class PortfolioDiagnosticEngine:
             # 3. Mkt-RF
             if mkt > 1.1: comments.append("🎢 **High Beta (Aggressive):** Moves more than the market average.")
             elif mkt < 0.9: comments.append("🛡️ **Low Beta (Defensive):** Relatively resilient during market downturns.")
+            
+            # 🔻追加: 新ファクターの診断 (EN)
+            if 'RMW' in params.index:
+                if rmw > 0.15: comments.append("💎 **Quality Focus (RMW):** Preference for highly profitable firms with robust financials.")
+                elif rmw < -0.15: comments.append("⚠️ **Low Profitability Bias (RMW):** Exposure to companies with weak profitability or deficits.")
+            if 'CMA' in params.index:
+                if cma > 0.15: comments.append("🐢 **Conservative Inv (CMA):** Leans towards firms cautious with capital expenditures.")
+                elif cma < -0.15: comments.append("🔥 **Aggressive Inv (CMA):** Favors firms aggressively investing for future growth.")
 
         return "\n".join(comments)
