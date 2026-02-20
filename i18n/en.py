@@ -113,5 +113,17 @@ TEXTS = {
     'pdf_map_cum': "■ Cumulative Return",
     'pdf_map_dd': "■ Drawdown",
     'pdf_map_factor': "■ Factor Exposure",
-    'pdf_map_attr': "■ Risk Attribution"
+    'pdf_map_attr': "■ Risk Attribution",
+
+    # ================= PDF Download UI =================
+    'pdf_section_title': "📄 Create Report",
+    'pdf_section_caption': "You can download the analysis results as a PDF report.",
+    'btn_generate_pdf': "📥 Generate PDF Report",
+    'msg_pdf_spinning': "📄 Generating PDF...",
+    'msg_pdf_ready': "✅ Report generation complete!",
+    'msg_pdf_err_empty': "⚠️ Failed to generate PDF data (empty data).",
+    'msg_pdf_err_nodata': "⚠️ Simulation data not found.",
+    'msg_pdf_err_gen': "PDF generation error: ",
+    'btn_download_pdf': "⬇️ Download PDF File",
+    'msg_pdf_hint': "ℹ️ To create a PDF report, please run the simulation first by clicking 'Run Analysis'."
 }
