@@ -9,12 +9,13 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib import colors
 
 # =========================================================
-# 🌍 PDF用 多言語翻訳辞書 (Step 2 追加)
+# 🌍 PDF用 多言語翻訳辞書 (Step 3 拡充)
 # =========================================================
 PDF_LANG_DICT = {
     'JA': {
         'title': "ポートフォリオ詳細分析レポート",
         'date': "作成日: ",
+        'advisor_title': "▼ アドバイザーからのメッセージ",
         'ch1_title': "1. 分析サマリー",
         'summary_text': """
         本ポートフォリオの年平均成長率(CAGR)は <b>{cagr}</b>、
@@ -45,6 +46,7 @@ PDF_LANG_DICT = {
     'EN': {
         'title': "Portfolio Detailed Analysis Report",
         'date': "Date: ",
+        'advisor_title': "▼ Advisor's Message",
         'ch1_title': "1. Analysis Summary",
         'summary_text': """
         The portfolio's Compound Annual Growth Rate (CAGR) is <b>{cagr}</b>, 
@@ -118,6 +120,8 @@ def create_pdf_report(payload, figs_dict):
     normal_style = ParagraphStyle('JpNormal', parent=styles['Normal'], fontName=font_name, fontSize=10.5, leading=16, spaceAfter=10)
     alert_style = ParagraphStyle('JpAlert', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14, textColor=colors.firebrick, spaceAfter=10)
     small_style = ParagraphStyle('JpSmall', parent=styles['Normal'], fontName=font_name, fontSize=9, leading=12, textColor=colors.gray, spaceAfter=5)
+    # 🔻追加: メッセージ用の強調スタイル (復元)
+    message_style = ParagraphStyle('JpMessage', parent=styles['Normal'], fontName=font_name, fontSize=10.5, leading=16, spaceAfter=10, backColor=colors.aliceblue, borderColor=colors.steelblue, borderWidth=1, borderPadding=10, borderRadius=5)
 
     # 4. コンテンツ構築
     story = []
@@ -126,6 +130,13 @@ def create_pdf_report(payload, figs_dict):
     story.append(Paragraph(t['title'], title_style))
     story.append(Paragraph(f"{t['date']}{payload.get('date', '-')}", normal_style))
     story.append(Spacer(1, 20))
+
+    # --- 🔻追加: アドバイザーメッセージ (多言語対応で復元) ---
+    if 'advisor_note' in payload and payload['advisor_note']:
+        story.append(Paragraph(t['advisor_title'], heading_style))
+        note_content = payload['advisor_note'].replace('\n', '<br/>')
+        story.append(Paragraph(note_content, message_style))
+        story.append(Spacer(1, 15))
 
     # --- 第1章: サマリー ---
     story.append(Paragraph(t['ch1_title'], heading_style))
@@ -200,13 +211,24 @@ def create_pdf_report(payload, figs_dict):
                         title_font=dict(family="Arial, Helvetica, sans-serif")
                     )
                 
-                # Plotly -> 画像変換
-                # 画像サイズ調整 (A4横幅に合わせるためwidth=900, scale=2などで高画質化して縮小表示)
-                img_bytes = fig.to_image(format="png", width=900, height=500, scale=2)
+                # -------------------------------------------------------
+                # 🔻修正: 5ファクターが重ならず綺麗に収まるようサイズ調整
+                # -------------------------------------------------------
+                chart_width = 900
+                chart_height = 500
+                
+                if key == 'factors':
+                    # 5項目に増えたため、高さを拡張し、英語ラベルが切れないよう左余白(l)を多めに確保
+                    chart_height = 650
+                    fig.update_layout(margin=dict(t=50, b=50, l=180, r=50))
+                
+                img_bytes = fig.to_image(format="png", width=chart_width, height=chart_height, scale=2)
                 img_io = io.BytesIO(img_bytes)
                 
                 # PDF上のサイズ (アスペクト比を維持しつつA4に収める)
-                im = RLImage(img_io, width=460, height=255) 
+                render_width = 460
+                render_height = int(render_width * (chart_height / chart_width))
+                im = RLImage(img_io, width=render_width, height=render_height) 
                 story.append(im)
                 story.append(Spacer(1, 15))
                 
