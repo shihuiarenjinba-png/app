@@ -9,7 +9,7 @@ import pandas_datareader.data as web
 from datetime import datetime
 
 # =========================================================
-# 🛠️ Class Definitions (Brain: V18.1 - Visual Logic Enhanced)
+# 🛠️ Class Definitions (Brain: V18.2 - Multi-Currency & Multi-Lingual Enhanced)
 # =========================================================
 
 class MarketDataEngine:
@@ -126,7 +126,7 @@ class MarketDataEngine:
                 data.index = data.index.tz_localize(None)
 
             # ==========================================
-            # 🔄 NEW: Currency Conversion Logic
+            # 🔄 Currency Conversion Logic
             # ==========================================
             usdjpy = _self._get_usdjpy()
             if not usdjpy.empty:
@@ -187,7 +187,7 @@ class MarketDataEngine:
                 data.index = data.index.tz_localize(None)
 
             # ==========================================
-            # 🔄 NEW: Currency Conversion Logic
+            # 🔄 Currency Conversion Logic
             # ==========================================
             usdjpy = _self._get_usdjpy()
             if not usdjpy.empty:
@@ -201,119 +201,6 @@ class MarketDataEngine:
                     # If base is USD, convert Japanese benchmarks to USD
                     if is_jpy_asset:
                         data = data / usdjpy
-            
-            return data.pct_change().dropna()
-        except:
-            return pd.Series(dtype=float)
-    @st.cache_data(ttl=3600*24*7)
-    def fetch_french_factors(_self, region='US'):
-        """Fetch Fama-French Factors (Robust Fallback)."""
-        try:
-            name = 'F-F_Research_Data_Factors'
-            if region == 'Japan': 
-                name = 'Japan_3_Factors'
-            elif region == 'Global': 
-                name = 'Global_3_Factors'
-
-            # Attempt to fetch data
-            ff_data = web.DataReader(name, 'famafrench', start=_self.start_date, end=_self.end_date)[0]
-            
-            # Process data if successful
-            ff_data = ff_data / 100.0
-            ff_data.index = ff_data.index.to_timestamp(freq='M')
-            
-            if ff_data.index.tz is not None: 
-                ff_data.index = ff_data.index.tz_localize(None)
-            
-            return ff_data
-        except Exception:
-            return pd.DataFrame()
-
-    @st.cache_data(ttl=3600*24)
-    def fetch_historical_prices(_self, tickers):
-        """Fetch stock prices."""
-        try:
-            raw_data = yf.download(tickers, start=_self.start_date, end=_self.end_date, interval="1mo", auto_adjust=True, progress=False)
-            data = pd.DataFrame()
-
-            if len(tickers) == 1:
-                ticker = tickers[0]
-                if isinstance(raw_data, pd.Series):
-                    data[ticker] = raw_data
-                elif isinstance(raw_data, pd.DataFrame):
-                    if 'Close' in raw_data.columns:
-                        data[ticker] = raw_data['Close']
-                    else:
-                        data[ticker] = raw_data.iloc[:, 0]
-            else:
-                if isinstance(raw_data.columns, pd.MultiIndex):
-                    try:
-                        data = raw_data.xs('Close', axis=1, level=0, drop_level=True)
-                    except KeyError:
-                        try:
-                            data = raw_data.xs('Adj Close', axis=1, level=0, drop_level=True)
-                        except:
-                            data = raw_data.iloc[:, :len(tickers)]
-                            data.columns = tickers
-                else:
-                    data = raw_data
-
-            data = data.resample('M').last().ffill()
-            if data.index.tz is not None:
-                data.index = data.index.tz_localize(None)
-
-            usdjpy = _self._get_usdjpy()
-            if not usdjpy.empty:
-                usdjpy = usdjpy.reindex(data.index, method='ffill')
-                data_jpy = data.copy()
-                for col in data.columns:
-                    # Do not convert Japanese assets or indices
-                    is_japan = str(col).endswith(".T") or str(col) in ["^N225", "^TPX", "1306.T"]
-                    if not is_japan:
-                        data_jpy[col] = data[col] * usdjpy
-            else:
-                data_jpy = data
-
-            returns = data_jpy.pct_change().dropna(how='all').dropna()
-            
-            valid_cols = [c for c in returns.columns if c in tickers]
-            if valid_cols:
-                returns = returns[valid_cols]
-            
-            return returns
-        except Exception as e:
-            st.error(f"Data Fetch Error: {e}")
-            return pd.DataFrame()
-
-    @st.cache_data(ttl=3600*24)
-    def fetch_benchmark_data(_self, ticker, is_jpy_asset=False):
-        """Fetch benchmark."""
-        try:
-            raw_data = yf.download(ticker, start=_self.start_date, end=_self.end_date, interval="1mo", auto_adjust=True, progress=False)
-            data = pd.Series(dtype=float)
-            if isinstance(raw_data, pd.DataFrame):
-                if 'Close' in raw_data.columns:
-                    data = raw_data['Close']
-                elif isinstance(raw_data.columns, pd.MultiIndex):
-                     try: data = raw_data.xs('Close', axis=1, level=0, drop_level=True)
-                     except: data = raw_data.iloc[:, 0]
-                else:
-                    data = raw_data.iloc[:, 0]
-            else:
-                data = raw_data
-
-            if isinstance(data, pd.DataFrame):
-                data = data.iloc[:, 0]
-
-            data = data.resample('M').last().ffill()
-            if data.index.tz is not None:
-                data.index = data.index.tz_localize(None)
-
-            if not is_jpy_asset:
-                usdjpy = _self._get_usdjpy()
-                if not usdjpy.empty:
-                    usdjpy = usdjpy.reindex(data.index, method='ffill')
-                    data = data * usdjpy
             
             return data.pct_change().dropna()
         except:
@@ -642,7 +529,7 @@ class PortfolioAnalyzer:
 
 class PortfolioDiagnosticEngine:
     @staticmethod
-    def generate_report(weights_dict, pca_ratio, port_ret, benchmark_ret=None):
+    def generate_report(weights_dict, pca_ratio, port_ret, benchmark_ret=None, lang='ja'):
         report = {
             "type": "",
             "risk_comment": "",
@@ -652,71 +539,106 @@ class PortfolioDiagnosticEngine:
         
         num_assets = len(weights_dict)
         
-        if num_assets == 1:
-            report["type"] = "🏹 集中投資 (スナイパー型)"
-            report["diversification_comment"] = "分散効果はゼロです。すべての卵を一つのカゴに入れています。"
-            report["risk_comment"] = "⚠️ 個別銘柄リスクを最大限に負っています。"
-            report["action_plan"] = "少なくとも3〜5つの相関の低い資産に分散することを推奨します。"
-        else:
-            if pca_ratio >= 0.85:
-                report["type"] = "⚠️ 見せかけの分散 (フェイク・ダイバーシフィケーション)"
-                report["diversification_comment"] = f"変動の{pca_ratio*100:.1f}%が単一の要因（市場全体など）で説明されてしまいます。"
-                report["risk_comment"] = "市場暴落時に、保有資産すべてが同時に下落するリスクが高い状態です。"
-                report["action_plan"] = "株式以外の資産（債券、ゴールドなど）を追加し、リスク要因を分散してください。"
-            elif pca_ratio <= 0.60:
-                report["type"] = "🏰 要塞型 (フォートレス)"
-                report["diversification_comment"] = f"メイン要因による説明率は{pca_ratio*100:.1f}%に留まり、独自の動きをする資産が組み込まれています。"
-                report["risk_comment"] = "無駄なリスクが効果的に分散され、防御力が高いポートフォリオです。"
-                report["action_plan"] = "現在のバランスは非常に良好です。リバランスを行い維持しましょう。"
+        if lang == 'ja':
+            if num_assets == 1:
+                report["type"] = "🏹 集中投資 (スナイパー型)"
+                report["diversification_comment"] = "分散効果はゼロです。すべての卵を一つのカゴに入れています。"
+                report["risk_comment"] = "⚠️ 個別銘柄リスクを最大限に負っています。"
+                report["action_plan"] = "少なくとも3〜5つの相関の低い資産に分散することを推奨します。"
             else:
-                report["type"] = "⚖️ バランス型"
-                report["diversification_comment"] = f"市場連動性は{pca_ratio*100:.1f}%で、標準的な分散レベルです。"
-                report["risk_comment"] = "市場平均と同程度のリスク・リターン特性を持つ可能性が高いです。"
-                report["action_plan"] = "より防御力を高めるなら、債券比率の調整やオルタナティブ資産の検討が有効です。"
+                if pca_ratio >= 0.85:
+                    report["type"] = "⚠️ 見せかけの分散 (フェイク・ダイバーシフィケーション)"
+                    report["diversification_comment"] = f"変動の{pca_ratio*100:.1f}%が単一の要因（市場全体など）で説明されてしまいます。"
+                    report["risk_comment"] = "市場暴落時に、保有資産すべてが同時に下落するリスクが高い状態です。"
+                    report["action_plan"] = "株式以外の資産（債券、ゴールドなど）を追加し、リスク要因を分散してください。"
+                elif pca_ratio <= 0.60:
+                    report["type"] = "🏰 要塞型 (フォートレス)"
+                    report["diversification_comment"] = f"メイン要因による説明率は{pca_ratio*100:.1f}%に留まり、独自の動きをする資産が組み込まれています。"
+                    report["risk_comment"] = "無駄なリスクが効果的に分散され、防御力が高いポートフォリオです。"
+                    report["action_plan"] = "現在のバランスは非常に良好です。リバランスを行い維持しましょう。"
+                else:
+                    report["type"] = "⚖️ バランス型"
+                    report["diversification_comment"] = f"市場連動性は{pca_ratio*100:.1f}%で、標準的な分散レベルです。"
+                    report["risk_comment"] = "市場平均と同程度のリスク・リターン特性を持つ可能性が高いです。"
+                    report["action_plan"] = "より防御力を高めるなら、債券比率の調整やオルタナティブ資産の検討が有効です。"
+        else:
+            if num_assets == 1:
+                report["type"] = "🏹 Concentrated (Sniper)"
+                report["diversification_comment"] = "Zero diversification effect. All eggs are in one basket."
+                report["risk_comment"] = "⚠️ Maximum specific stock risk."
+                report["action_plan"] = "We recommend diversifying into at least 3-5 assets with low correlation."
+            else:
+                if pca_ratio >= 0.85:
+                    report["type"] = "⚠️ Fake Diversification"
+                    report["diversification_comment"] = f"{pca_ratio*100:.1f}% of variance is explained by a single factor."
+                    report["risk_comment"] = "High risk of all assets dropping simultaneously during a market crash."
+                    report["action_plan"] = "Add non-equity assets (bonds, gold, etc.) to diversify risk factors."
+                elif pca_ratio <= 0.60:
+                    report["type"] = "🏰 Fortress"
+                    report["diversification_comment"] = f"Main factor explains only {pca_ratio*100:.1f}%. Contains assets with unique movements."
+                    report["risk_comment"] = "Unnecessary risks are effectively diversified. Highly defensive portfolio."
+                    report["action_plan"] = "Current balance is excellent. Maintain via periodic rebalancing."
+                else:
+                    report["type"] = "⚖️ Balanced"
+                    report["diversification_comment"] = f"Market correlation is {pca_ratio*100:.1f}%, a standard diversification level."
+                    report["risk_comment"] = "Likely has risk/return characteristics similar to the market average."
+                    report["action_plan"] = "To increase defense, consider adjusting bond ratios or adding alternative assets."
 
         return report
 
     @staticmethod
-    def get_skew_kurt_desc(port_ret):
-        if port_ret.empty: return "データ不足です。"
+    def get_skew_kurt_desc(port_ret, lang='ja'):
+        if port_ret.empty: 
+            return "データ不足です。" if lang == 'ja' else "Insufficient data."
+            
         skew = port_ret.skew()
         kurt = port_ret.kurt()
         desc = []
-        if skew < -0.5: desc.append("⚠️ 負の歪度: 通常時は安定していますが、稀に大きな急落が起きるリスクがあります（コツコツドカン型）。")
-        elif skew > 0.5: desc.append("✅ 正の歪度: 損失は限定的ですが、稀に大きな利益が出る可能性があります。")
         
-        if kurt > 2.0: desc.append("⚠️ ファットテール: 正規分布に比べて「極端な事象（暴騰・暴落）」が発生する確率が高い状態です。")
-        
-        return " ".join(desc) if desc else "統計的に標準的な分布（正規分布に近い）です。"
+        if lang == 'ja':
+            if skew < -0.5: desc.append("⚠️ 負の歪度: 通常時は安定していますが、稀に大きな急落が起きるリスクがあります（コツコツドカン型）。")
+            elif skew > 0.5: desc.append("✅ 正の歪度: 損失は限定的ですが、稀に大きな利益が出る可能性があります。")
+            if kurt > 2.0: desc.append("⚠️ ファットテール: 正規分布に比べて「極端な事象（暴騰・暴落）」が発生する確率が高い状態です。")
+            return " ".join(desc) if desc else "統計的に標準的な分布（正規分布に近い）です。"
+        else:
+            if skew < -0.5: desc.append("⚠️ Negative Skewness: Normally stable, but risks sudden sharp drops.")
+            elif skew > 0.5: desc.append("✅ Positive Skewness: Limited losses with potential for rare large gains.")
+            if kurt > 2.0: desc.append("⚠️ Fat Tail: Higher probability of 'extreme events' (crashes/spikes) than a normal distribution.")
+            return " ".join(desc) if desc else "Statistically normal distribution."
 
     @staticmethod
-    def generate_factor_report(params):
+    def generate_factor_report(params, lang='ja'):
         """Translate Factor Analysis."""
-        if params is None: return "データなし"
+        if params is None: 
+            return "データなし" if lang == 'ja' else "No Data"
         
         comments = []
         
-        # 1. HML
         hml = params.get('HML', 0)
-        if hml > 0.15:
-            comments.append("✅ **バリュー株選好:** 割安株や高配当株との連動性が高いです。")
-        elif hml < -0.15:
-            comments.append("🚀 **グロース株選好:** 成長株やハイテク株との連動性が高いです。")
-        else:
-            comments.append("⚖️ **スタイル中立:** バリューとグロースのバランスが取れています。")
-
-        # 2. SMB
         smb = params.get('SMB', 0)
-        if smb > 0.15:
-            comments.append("🐣 **小型株バイアス:** 変動は大きいですが、将来の成長余地を取りに行っています。")
-        elif smb < -0.15:
-            comments.append("🐘 **大型株バイアス:** 安定した大企業中心の構成です。")
-        
-        # 3. Mkt-RF
         mkt = params.get('Mkt-RF', 1.0)
-        if mkt > 1.1:
-            comments.append("🎢 **ハイベータ（積極運用）:** 市場平均よりも大きく動く、攻撃的な構成です。")
-        elif mkt < 0.9:
-            comments.append("🛡️ **ローベータ（守りの運用）:** 市場下落時にも比較的ダメージを受けにくい構成です。")
+        
+        if lang == 'ja':
+            # 1. HML
+            if hml > 0.15: comments.append("✅ **バリュー株選好:** 割安株や高配当株との連動性が高いです。")
+            elif hml < -0.15: comments.append("🚀 **グロース株選好:** 成長株やハイテク株との連動性が高いです。")
+            else: comments.append("⚖️ **スタイル中立:** バリューとグロースのバランスが取れています。")
+            # 2. SMB
+            if smb > 0.15: comments.append("🐣 **小型株バイアス:** 変動は大きいですが、将来の成長余地を取りに行っています。")
+            elif smb < -0.15: comments.append("🐘 **大型株バイアス:** 安定した大企業中心の構成です。")
+            # 3. Mkt-RF
+            if mkt > 1.1: comments.append("🎢 **ハイベータ（積極運用）:** 市場平均よりも大きく動く、攻撃的な構成です。")
+            elif mkt < 0.9: comments.append("🛡️ **ローベータ（守りの運用）:** 市場下落時にも比較的ダメージを受けにくい構成です。")
+        else:
+            # 1. HML
+            if hml > 0.15: comments.append("✅ **Value Bias:** Highly correlated with undervalued or high-dividend stocks.")
+            elif hml < -0.15: comments.append("🚀 **Growth Bias:** Highly correlated with growth or tech stocks.")
+            else: comments.append("⚖️ **Style Neutral:** Balanced between value and growth.")
+            # 2. SMB
+            if smb > 0.15: comments.append("🐣 **Small Cap Bias:** High volatility, aiming for future growth potential.")
+            elif smb < -0.15: comments.append("🐘 **Large Cap Bias:** Centered around stable, large enterprises.")
+            # 3. Mkt-RF
+            if mkt > 1.1: comments.append("🎢 **High Beta (Aggressive):** Moves more than the market average.")
+            elif mkt < 0.9: comments.append("🛡️ **Low Beta (Defensive):** Relatively resilient during market downturns.")
 
         return "\n".join(comments)
