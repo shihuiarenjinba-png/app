@@ -14,6 +14,7 @@ TEXTS = {
     'currency_jpy': "JPY",
     'currency_usd': "USD",
     'no_data': "Insufficient data.",
+    'default_advisor_note': "Based on this analysis, we recommend this allocation prioritizing a balance of growth and stability. Please perform regular rebalancing according to your risk tolerance.",
 
     # ================= グラフ・チャート =================
     'graph_pca': "Asset Similarity Map",
