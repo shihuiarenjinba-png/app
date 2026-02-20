@@ -29,7 +29,6 @@ except ImportError as e:
 # =========================================================
 # 🎨 定数・スタイル設定
 # =========================================================
-
 COLORS = {
     'main': '#00FFFF',      # Neon Cyan
     'benchmark': '#FF69B4', # Hot Pink
@@ -57,12 +56,66 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🧬 Factor & Stress Test Simulator V18.1")
-st.caption("Professional Edition: ポートフォリオ診断・モンテカルロ分析・リスク管理")
+
+# =========================================================
+# 🌍 共通言語辞書（Dictionary）の実装
+# =========================================================
+LANG_DICT = {
+    'JA': {
+        'title': "🧬 Factor & Stress Test Simulator V18.1",
+        'caption': "Professional Edition: ポートフォリオ診断・モンテカルロ分析・リスク管理",
+        'sidebar_global': "🌐 言語・通貨設定",
+        'sidebar_settings': "⚙️ 設定パネル",
+        'btn_analyze': "🚀 分析を開始する",
+        'tab_names': ["🧬 構成", "🌊 要因", "⏳ 過去", "💸 コスト", "🏆 寄与度", "🔮 将来"],
+        'metric_cagr': "年平均成長率 (CAGR)",
+        'metric_vol': "リスク (Vol)",
+        'metric_maxdd': "最大下落率 (Max DD)",
+        'metric_sharpe': "シャープレシオ",
+        'metric_omega': "オメガレシオ",
+        'graph_pca': "資産の類似性マップ",
+        'graph_beta': "ファクター感応度 (Beta)",
+        'graph_roll': "ファクター感応度の推移（全期間）",
+        'graph_dist': "月次リターンの分布 vs 正規分布",
+        'graph_cost': "資産成長とコストの浸食イメージ (元本=1.0)",
+        'currency_jpy': "円",
+        'currency_usd': "USD"
+    },
+    'EN': {
+        'title': "🧬 Factor & Stress Test Simulator V18.1",
+        'caption': "Professional Edition: Portfolio Diagnostics, Monte Carlo & Risk Mgt",
+        'sidebar_global': "🌐 Global Settings",
+        'sidebar_settings': "⚙️ Settings Panel",
+        'btn_analyze': "🚀 Run Analysis",
+        'tab_names': ["🧬 Comp", "🌊 Factors", "⏳ History", "💸 Cost", "🏆 Attrib", "🔮 Future"],
+        'metric_cagr': "CAGR",
+        'metric_vol': "Risk (Vol)",
+        'metric_maxdd': "Max Drawdown",
+        'metric_sharpe': "Sharpe Ratio",
+        'metric_omega': "Omega Ratio",
+        'graph_pca': "Asset Similarity Map",
+        'graph_beta': "Factor Sensitivity (Beta)",
+        'graph_roll': "Factor Sensitivity Trajectory (All)",
+        'graph_dist': "Monthly Returns Dist vs Normal",
+        'graph_cost': "Asset Growth & Cost Drag (Base=1.0)",
+        'currency_jpy': "JPY",
+        'currency_usd': "USD"
+    }
+}
+
+# 翻訳呼び出し用のヘルパー関数
+def t(key):
+    lang = st.session_state.get('lang', 'JA')
+    return LANG_DICT.get(lang, LANG_DICT['JA']).get(key, key)
+
 
 # =========================================================
 # 🛠️ セッション状態の初期化
 # =========================================================
+if 'lang' not in st.session_state:
+    st.session_state.lang = 'JA'
+if 'base_currency' not in st.session_state:
+    st.session_state.base_currency = 'JPY'
 if 'portfolio_data' not in st.session_state:
     st.session_state.portfolio_data = None
 if 'analysis_done' not in st.session_state:
@@ -74,14 +127,31 @@ if 'payload' not in st.session_state:
 if 'figs' not in st.session_state:
     st.session_state.figs = {}
 
+# タイトル表示（辞書適用）
+st.title(t('title'))
+st.caption(t('caption'))
+
+
 # =========================================================
 # 🏗️ サイドバー: ポートフォリオ設定
 # =========================================================
 with st.sidebar:
-    st.header("⚙️ 設定パネル")
+    st.header(t('sidebar_global'))
+    
+    # 🌍 UI（サイドバー）の設置: 言語と通貨の切り替えスイッチ
+    c_lang, c_curr = st.columns(2)
+    with c_lang:
+        selected_lang = st.selectbox("Language / 言語", ["JA", "EN"], index=0 if st.session_state.lang == 'JA' else 1)
+    with c_curr:
+        selected_curr = st.selectbox("Currency / 通貨", ["JPY", "USD"], index=0 if st.session_state.base_currency == 'JPY' else 1)
+    
+    # セッションの更新
+    st.session_state.lang = selected_lang
+    st.session_state.base_currency = selected_curr
+    
+    st.markdown("---")
 
-    # 【変更点】PDFレポート用の言語選択トグルを追加（UI自体は日本語ベースを維持）
-    report_lang = st.radio("🌐 レポート出力言語 (PDF)", ["ja", "en"], format_func=lambda x: "日本語" if x == "ja" else "English", horizontal=True)
+    st.header(t('sidebar_settings'))
 
     st.markdown("### 1. ポートフォリオ構成")
     
@@ -136,7 +206,7 @@ with st.sidebar:
                                 height=100)
 
     st.markdown("---")
-    analyze_btn = st.button("🚀 分析を開始する", type="primary", use_container_width=True)
+    analyze_btn = st.button(t('btn_analyze'), type="primary", use_container_width=True)
 
 # =========================================================
 # 🚀 メインロジック (計算実行)
@@ -206,10 +276,15 @@ if analyze_btn:
 # =========================================================
 
 if st.session_state.portfolio_data:
+    # データの展開
     data = st.session_state.portfolio_data
     analyzer = PortfolioAnalyzer()
     port_ret = data['returns']
     bench_ret = data['benchmark']
+
+    # 🌍 通貨基準（Numeraire）の設定
+    curr_unit = t('currency_jpy') if st.session_state.base_currency == 'JPY' else t('currency_usd')
+    init_inv = 1000000 if st.session_state.base_currency == 'JPY' else 10000
 
     # --- 1. 基本指標 ---
     total_ret_cum = (1 + port_ret).cumprod()
@@ -240,7 +315,6 @@ if st.session_state.portfolio_data:
 
     # モンテカルロ
     sim_years = 20
-    init_inv = 1000000
     df_stats, final_values = analyzer.run_monte_carlo_simulation(port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv)
     
     final_median = np.median(final_values)
@@ -257,8 +331,10 @@ if st.session_state.portfolio_data:
     pca_ratio, _ = analyzer.perform_pca(data['components'])
     report = PortfolioDiagnosticEngine.generate_report(data['weights'], pca_ratio, port_ret)
 
-    # 詳細レビュー生成 (UI表示用・日本語)
+    # ▼ 詳細レビュー生成 (日本語版) ▼
     detailed_review = []
+    
+    # 効率性評価
     if sharpe_ratio > 1.0:
         detailed_review.append(f"✅ 効率性: 非常に優れたリスク調整後リターン (Sharpe: {sharpe_ratio:.2f}) を示しています。取ったリスクに対して十分なリターンが得られています。")
     elif sharpe_ratio > 0.6:
@@ -266,6 +342,7 @@ if st.session_state.portfolio_data:
     else:
         detailed_review.append(f"⚠️ 効率性: リスクに対するリターンがやや低めです (Sharpe: {sharpe_ratio:.2f})。分散投資の強化や、高ボラティリティ資産の比率見直しを検討してください。")
 
+    # ボラティリティ評価
     if vol < 0.12:
         detailed_review.append(f"🛡️ 安定性: 変動率（ボラティリティ）は低く ({vol:.2%})、資産保全に適したディフェンシブな構成です。")
     elif vol < 0.18:
@@ -273,30 +350,21 @@ if st.session_state.portfolio_data:
     else:
         detailed_review.append(f"🔥 安定性: 変動率が高くなっています ({vol:.2%})。大きな価格変動に耐えられるリスク許容度が必要です。")
 
+    # ドローダウン評価
     detailed_review.append(f"📉 耐性テスト: 過去の最大下落率（Max Drawdown）は {max_dd:.2%} でした。将来の弱気相場でも同程度の一時的な資産減少を覚悟する必要があります。")
 
     detailed_review_str = "\n".join(detailed_review)
 
-    # =========================================================
-    # 【変更点】 3. Payload 作成（多言語ジェネレーターへの橋渡し）
-    # 日本語の文字列だけでなく「生の数値データ」を渡す構造に変更しました
-    # =========================================================
+    # --- 3. Payload 作成 (分析が完了した時点でセッションに保存) ---
     st.session_state.payload = {
-        'lang': report_lang, # 👈 サイドバーで選んだ言語 (ja/en)
         'date': pd.Timestamp.now().strftime('%Y-%m-%d'),
-        'metrics': { # UI用のフォーマット済み文字列
+        'metrics': {
             'CAGR': f"{cagr:.2%}",
             'Vol': f"{vol:.2%}",
             'MaxDD': f"{max_dd:.2%}",
             'Sharpe': f"{sharpe_ratio:.2f}",
             'Calmar Ratio': f"{calmar:.2f}",
             'Information Ratio': f"{info_ratio:.2f}" if not np.isnan(info_ratio) else "N/A"
-        },
-        'raw_metrics': { # 👈 PDFジェネレーター用 (多言語対応のため生数値を渡す)
-            'cagr': cagr,
-            'vol': vol,
-            'max_dd': max_dd,
-            'sharpe': sharpe_ratio
         },
         'factor_comment': factor_comment,
         'diagnosis': {
@@ -305,13 +373,11 @@ if st.session_state.portfolio_data:
             'risk_comment': report['risk_comment'],
             'action_plan': report['action_plan']
         },
-        'detailed_review': detailed_review_str, # UI表示用の日本語レビュー
-        'mc_stats': f"中央値シナリオ: {final_median:,.0f}円 | 悲観シナリオ(10%): {final_p10:,.0f}円 | 楽観シナリオ(90%): {final_p90:,.0f}円",
-        'mc_stats_raw': { # 👈 PDFジェネレーター用 (通貨単位などを英語/日本語で分けるため)
-            'median': final_median,
-            'p10': final_p10,
-            'p90': final_p90
-        }
+        'detailed_review': detailed_review_str,
+        # 🌍 基準通貨を適用
+        'mc_stats': f"中央値シナリオ: {final_median:,.0f} {curr_unit} | "
+                    f"悲観シナリオ(10%): {final_p10:,.0f} {curr_unit} | "
+                    f"楽観シナリオ(90%): {final_p90:,.0f} {curr_unit}"
     }
 
     # PDF用にグラフを格納する一時辞書
@@ -323,18 +389,19 @@ if st.session_state.portfolio_data:
     st.markdown("---")
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("年平均成長率 (CAGR)", f"{cagr:.2%}")
-    c2.metric("リスク (Vol)", f"{vol:.2%}")
-    c3.metric("最大下落率 (Max DD)", f"{max_dd:.2%}", delta_color="inverse")
-    c4.metric("シャープレシオ", f"{sharpe_ratio:.2f}")
-    c5.metric("オメガレシオ", f"{omega:.2f}")
+    c1.metric(t('metric_cagr'), f"{cagr:.2%}")
+    c2.metric(t('metric_vol'), f"{vol:.2%}")
+    c3.metric(t('metric_maxdd'), f"{max_dd:.2%}", delta_color="inverse")
+    c4.metric(t('metric_sharpe'), f"{sharpe_ratio:.2f}")
+    c5.metric(t('metric_omega'), f"{omega:.2f}")
 
     if not np.isnan(info_ratio):
         st.caption(f"📊 対ベンチマーク ({data['bench_name']}) | インフォメーションレシオ: **{info_ratio:.2f}** (トラッキングエラー: {track_err:.2%})")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🧬 構成", "🌊 要因", "⏳ 過去", "💸 コスト", "🏆 寄与度", "🔮 将来"])
+    # 🌍 タブ名を辞書から取得
+    tabs = st.tabs(t('tab_names'))
 
-    with tab1:
+    with tabs[0]:
         c1, c2 = st.columns([1, 1])
         with c1:
             st.subheader("分散の質 (PCA分析)")
@@ -356,7 +423,7 @@ if st.session_state.portfolio_data:
                     labels = comp_clean.columns
                     
                     fig_pca = px.scatter(x=pca_coords[:, 0], y=pca_coords[:, 1], text=labels, 
-                                         color=labels, title="資産の類似性マップ")
+                                         color=labels, title=t('graph_pca'))
                     fig_pca.update_traces(textposition='top center', marker=dict(size=12))
                     fig_pca.update_layout(xaxis_title="第1成分", yaxis_title="第2成分", showlegend=False)
                     st.plotly_chart(fig_pca, use_container_width=True)
@@ -389,7 +456,7 @@ if st.session_state.portfolio_data:
             fig_corr_report.update_layout(height=corr_height)
             st.plotly_chart(fig_corr_report, use_container_width=True)
 
-    with tab2:
+    with tabs[1]:
         if data['factors'].empty:
             st.error("🚫 ファクターデータの取得に失敗しました。")
         else:
@@ -403,7 +470,7 @@ if st.session_state.portfolio_data:
                         x=beta_df.values, y=beta_df.index, orientation='h', 
                         marker_color=colors, text=[f"{x:.2f}" for x in beta_df.values], textposition='auto'
                     ))
-                    fig_beta.update_layout(title="ファクター感応度 (Beta)", xaxis_title="感応度", height=300)
+                    fig_beta.update_layout(title=t('graph_beta'), xaxis_title="感応度", height=300)
                     st.plotly_chart(fig_beta, use_container_width=True)
                     st.caption(f"決定係数 (R²): {r_sq:.2%} (モデル説明力)")
                     figs_for_report['factors'] = fig_beta
@@ -434,12 +501,12 @@ if st.session_state.portfolio_data:
                     for c in cols:
                         fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas[c], name=c))
 
-                fig_roll.update_layout(title="ファクター感応度の推移（全期間）", yaxis_title="Beta", height=400)
+                fig_roll.update_layout(title=t('graph_roll'), yaxis_title="Beta", height=400)
                 st.plotly_chart(fig_roll, use_container_width=True)
             else:
                 st.info("ローリング分析には少なくとも12ヶ月以上のデータが必要です。")
 
-    with tab3:
+    with tabs[2]:
         st.subheader("過去データによるストレステスト")
         cum_ret = (1 + port_ret).cumprod() * 10000
         fig_hist = go.Figure()
@@ -482,10 +549,10 @@ if st.session_state.portfolio_data:
             y_norm = (1 / (np.sqrt(2 * np.pi) * std)) * np.exp(-0.5 * ((x_range - mu) / std) ** 2)
             fig_dist.add_trace(go.Scatter(x=x_range, y=y_norm, mode='lines', name='正規分布 (理論値)', line=dict(color='white', dash='dash', width=2)))
         
-        fig_dist.update_layout(title="月次リターンの分布 vs 正規分布", xaxis_title="月次リターン", yaxis_title="密度", height=400)
+        fig_dist.update_layout(title=t('graph_dist'), xaxis_title="月次リターン", yaxis_title="密度", height=400)
         st.plotly_chart(fig_dist, use_container_width=True)
 
-    with tab4:
+    with tabs[3]:
         st.subheader("コストによるリターン低下分析 (20年シミュレーション)")
         
         sim_res = analyzer.cost_drag_simulation(port_ret, data['cost_tier'])
@@ -495,12 +562,14 @@ if st.session_state.portfolio_data:
             gross, net, loss = sim_res
             cost_pct = 0.0 # fallback
         
-        loss_amount = 1000000 * loss
-        final_amount_net = 1000000 * net.iloc[-1]
+        # 🌍 基準通貨の適用
+        loss_amount = init_inv * loss
+        final_amount_net = init_inv * net.iloc[-1]
         
         c1, c2 = st.columns([3, 1])
         with c1:
             fig_cost = go.Figure()
+            # 下層: 実質リターン
             fig_cost.add_trace(go.Scatter(
                 x=net.index, y=net, 
                 mode='lines', 
@@ -509,6 +578,7 @@ if st.session_state.portfolio_data:
                 line=dict(color=COLORS['main'], width=2),
                 fillcolor='rgba(0, 255, 255, 0.2)'
             ))
+            # 上層: 失われたコスト (差分)
             loss_series = gross - net
             fig_cost.add_trace(go.Scatter(
                 x=gross.index, y=loss_series, 
@@ -519,15 +589,15 @@ if st.session_state.portfolio_data:
                 fillcolor='rgba(255, 99, 71, 0.3)'
             ))
             
-            fig_cost.update_layout(title="資産成長とコストの浸食イメージ (元本=1.0)", xaxis_title="経過年数", yaxis_title="倍率")
+            fig_cost.update_layout(title=t('graph_cost'), xaxis_title="経過年数", yaxis_title="倍率")
             st.plotly_chart(fig_cost, use_container_width=True)
             
         with c2:
-            st.error(f"💸 失われる価値: ▲{loss_amount:,.0f} 円")
-            st.markdown(f"最終評価額 (100万円投資): **{final_amount_net:,.0f} 円**")
+            st.error(f"💸 失われる価値: ▲{loss_amount:,.0f} {curr_unit}")
+            st.markdown(f"最終評価額 ({init_inv:,.0f} 投資): **{final_amount_net:,.0f} {curr_unit}**")
             st.info(f"推定コスト率: 年 {cost_pct:.2%}")
 
-    with tab5:
+    with tabs[4]:
         st.subheader("リスク寄与度 vs 投資配分")
         attrib = analyzer.calculate_strict_attribution(data['components'], data['weights'])
         
@@ -544,6 +614,7 @@ if st.session_state.portfolio_data:
             
             r_absolute = attrib[common_idx] * 100
 
+            # --- グラフA: 相対評価 (集中度確認用) ---
             st.markdown("#### A. 相対リスク寄与度（集中度の確認）")
             st.caption("全体のリスクを100%とした場合、どの銘柄がリスクを占めているか（分散の偏り）")
             
@@ -569,6 +640,7 @@ if st.session_state.portfolio_data:
             )
             st.plotly_chart(fig_rel, use_container_width=True)
             
+            # --- グラフB: 絶対評価 (変動リスク確認用) ---
             st.markdown("#### B. 絶対リスク寄与度（実際の変動量）")
             st.caption("その銘柄が実際にポートフォリオの変動（ボラティリティ）をどれだけ作り出しているか")
             
@@ -588,14 +660,16 @@ if st.session_state.portfolio_data:
 
             figs_for_report['attribution'] = fig_rel
 
-    with tab6:
+    with tabs[5]:
         st.subheader("🎲 モンテカルロ・シミュレーション (7,500回 / ファットテール対応)")
         if df_stats is not None:
             fig_mc = go.Figure()
             fig_mc.add_trace(go.Scatter(x=df_stats.index, y=df_stats['p50'], mode='lines', name='中央値', line=dict(color=COLORS['median'], width=3)))
             fig_mc.add_trace(go.Scatter(x=df_stats.index, y=df_stats['p10'], mode='lines', name='下位 10% (悲観)', line=dict(color=COLORS['p10'], width=1, dash='dot')))
             fig_mc.add_trace(go.Scatter(x=df_stats.index, y=df_stats['p90'], mode='lines', name='上位 10% (楽観)', line=dict(color=COLORS['p90'], width=1, dash='dot')))
-            fig_mc.update_layout(title=f"20年後の資産予測 (元本: {init_inv:,} 円)", yaxis_title="評価額 (円)", height=500)
+            
+            # 🌍 基準通貨の適用
+            fig_mc.update_layout(title=f"20年後の資産予測 (元本: {init_inv:,} {curr_unit})", yaxis_title=f"評価額 ({curr_unit})", height=500)
             st.plotly_chart(fig_mc, use_container_width=True)
             figs_for_report['monte_carlo'] = fig_mc
 
@@ -608,6 +682,7 @@ if st.session_state.portfolio_data:
             mc3.metric("平均値", f"{final_mean:,.0f}")
             mc4.metric("楽観 (P90)", f"{final_p90:,.0f}")
 
+            # ヒストグラム
             fig_mc_hist = go.Figure()
             counts, _ = np.histogram(final_values, bins=100)
             y_max_freq = counts.max()
@@ -632,8 +707,9 @@ if st.session_state.portfolio_data:
                     text=label, showarrow=False, font=dict(color=color)
                 )
 
+            # 🌍 基準通貨の適用
             fig_mc_hist.update_layout(
-                xaxis_title="最終評価額 (円)", yaxis_title="頻度", showlegend=False,
+                xaxis_title=f"最終評価額 ({curr_unit})", yaxis_title="頻度", showlegend=False,
                 xaxis=dict(range=[0, x_max_view]), 
                 yaxis=dict(range=[0, y_max_freq * 1.4])
             )
@@ -641,7 +717,7 @@ if st.session_state.portfolio_data:
             
             st.success(f"✅ シミュレーション完了: **7,500 シナリオ** を生成しました。")
 
-    # セッションへの保存
+    # セッションへの保存 (分析完了フラグとグラフデータ)
     st.session_state.analysis_done = True
     st.session_state.figs = figs_for_report
 
@@ -657,6 +733,7 @@ if st.session_state.analysis_done:
 
     col_gen, col_dl = st.columns([1, 1])
 
+    # PDF作成ボタン
     with col_gen:
         if st.button("📥 PDFレポートを作成"):
             with st.spinner("📄 PDFを生成中..."):
@@ -678,6 +755,7 @@ if st.session_state.analysis_done:
                 except Exception as e:
                     st.error(f"PDF生成エラー: {e}")
 
+    # ダウンロードボタン (生成済みの場合に表示)
     with col_dl:
         if st.session_state.pdf_bytes is not None:
             st.download_button(
