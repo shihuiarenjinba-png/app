@@ -355,8 +355,30 @@ if st.session_state.portfolio_data:
 
     detailed_review_str = "\n".join(detailed_review)
 
-    # --- 3. Payload 作成 (分析が完了した時点でセッションに保存) ---
+    # =========================================================
+    # 🛡️ 【重要修正】Payload 作成 (Step 1)
+    # 既存の日本語データは一切崩さず、PDFジェネレーター用の生データを追加
+    # =========================================================
     st.session_state.payload = {
+        # ▼ 追加: PDF多言語化ジェネレーターへ渡す生データ ▼
+        'lang': st.session_state.lang,
+        'currency': st.session_state.base_currency,
+        'curr_unit': curr_unit,
+        'raw_metrics': {
+            'CAGR': cagr,
+            'Vol': vol,
+            'MaxDD': max_dd,
+            'Sharpe': sharpe_ratio
+        },
+        'raw_mc_stats': {
+            'median': final_median,
+            'p10': final_p10,
+            'p90': final_p90,
+            'init_inv': init_inv
+        },
+        # ▲ 追加ここまで ▲
+
+        # ▼ 既存のデータ（アプリ・UIの安全確保のため一切変更なし）▼
         'date': pd.Timestamp.now().strftime('%Y-%m-%d'),
         'metrics': {
             'CAGR': f"{cagr:.2%}",
