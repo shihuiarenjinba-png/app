@@ -23,7 +23,7 @@ def get_text(key, lang='JA'):
         return en.TEXTS.get(key, key)
 
 # =========================================================
-# 🛠️ Class Definitions (Brain: V19 - Dynamic Regime & Succession)
+# 🛠️ Class Definitions (Brain: V20 - Traditional GBM & No Magic Numbers)
 # =========================================================
 
 class MarketDataEngine:
@@ -170,7 +170,7 @@ class MarketDataEngine:
             else:
                 data_final = data
 
-            # 🔻修正: .dropna() を外し和集合(Union)を維持。データ欠損部はNaNとして残す
+            # .dropna() を外し和集合(Union)を維持。データ欠損部はNaNとして残す
             returns = data_final.pct_change().dropna(how='all')
             
             valid_cols = [c for c in returns.columns if c in tickers]
@@ -223,7 +223,7 @@ class MarketDataEngine:
 
 class PortfolioAnalyzer:
     
-    # 🔻修正: 動的リバランスとNaN補完（自動承継）の実装
+    # 動的リバランスとNaN補完（自動承継）の実装
     @staticmethod
     def create_synthetic_history(returns_df, weights_dict, benchmark_ret=None, rebalance_freq='M'):
         valid_tickers = [t for t in weights_dict.keys() if t in returns_df.columns]
@@ -310,59 +310,37 @@ class PortfolioAnalyzer:
         except:
             return None, None
 
-    # 🔻修正: レジームスイッチングと t分布による動的ボラティリティ・ドラッグの実装
+    # 🔻修正: 伝統的な幾何ブラウン運動（GBM）への完全移行と高速化
     @staticmethod
     def run_monte_carlo_simulation(port_ret, n_years=20, n_simulations=7500, initial_investment=1000000):
         if port_ret.empty:
             return None, None
 
+        # 過去データから「算術平均」と「標準偏差」を算出
         mu_monthly = port_ret.mean()
         sigma_monthly = port_ret.std()
         
         n_months = n_years * 12
         
-        # t分布の自由度（ファットテール・極端な変動の強調）
-        df_t = 5 
+        # GBMのドリフト項 (期待リターン - ボラティリティによる減価)
+        drift = mu_monthly - 0.5 * (sigma_monthly ** 2)
         
+        # forループを排除し、NumPyのベクトル演算で一括生成（高速化）
+        # 標準的な正規分布によるランダムショック
+        Z = np.random.normal(0, 1, (n_months, n_simulations))
+        
+        # GBMの公式に基づく月次リターンの生成
+        monthly_returns = np.exp(drift + sigma_monthly * Z)
+        
+        # 累積リターンを一括計算し、資産推移パスを作成
         price_paths = np.zeros((n_months + 1, n_simulations))
         price_paths[0] = initial_investment
-        
-        # 初期レジーム設定 (0: 平時/上昇相場, 1: 有事/パニック相場)
-        current_regime = np.zeros(n_simulations, dtype=int)
-        
-        # 状態遷移確率（マルコフ連鎖）
-        p_00 = 0.95 # 平時が継続する確率 (95%)
-        p_11 = 0.80 # 有事が継続する確率 (80%)
-
-        for m in range(1, n_months + 1):
-            # 確率に基づくレジームの遷移
-            rand_trans = np.random.rand(n_simulations)
-            to_crisis = (current_regime == 0) & (rand_trans > p_00)
-            to_normal = (current_regime == 1) & (rand_trans > p_11)
-            
-            current_regime[to_crisis] = 1
-            current_regime[to_normal] = 0
-            
-            # 各レジームにおける 今月の期待リターンとボラティリティ
-            # 有事(1)の場合、リターンは下落し、ボラティリティは2倍に跳ね上がる
-            current_mu = np.where(current_regime == 0, mu_monthly, mu_monthly - sigma_monthly)
-            current_sigma = np.where(current_regime == 0, sigma_monthly, sigma_monthly * 2.0)
-            
-            # 正規分布ではなく、t分布からのランダムサンプリング
-            Z = np.random.standard_t(df_t, n_simulations)
-            
-            # ボラティリティ・ドラッグの動的適用 (G ≈ A - 1/2 * σ^2)
-            # 変動率が大きい有事には、幾何平均リターンが大幅に削られる
-            drift = current_mu - 0.5 * (current_sigma ** 2)
-            
-            monthly_returns = np.exp(drift + current_sigma * Z)
-            
-            # 資産額の更新
-            price_paths[m] = price_paths[m-1] * monthly_returns
+        price_paths[1:] = initial_investment * np.cumprod(monthly_returns, axis=0)
         
         last_date = port_ret.index[-1]
         future_dates = pd.date_range(start=last_date, periods=n_months + 1, freq='M')
         
+        # パーセンタイルの抽出
         percentiles = [10, 50, 90]
         stats_data = np.percentile(price_paths, percentiles, axis=1)
         df_stats = pd.DataFrame(stats_data.T, index=future_dates, columns=['p10', 'p50', 'p90'])
