@@ -13,7 +13,7 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 # =========================================================
 # ⚙️ ページ設定 (最初に行う必要があります)
 # =========================================================
-st.set_page_config(page_title="Factor Simulator V18.1", layout="wide", page_icon="🧬")
+st.set_page_config(page_title="Factor Simulator V19", layout="wide", page_icon="🧬")
 
 # =========================================================
 # 🔗 モジュール読み込みチェック
@@ -165,6 +165,25 @@ with st.sidebar:
     st.markdown(f"### {t('sb_sec3')}")
     cost_tier = st.select_slider(t('sb_cost_tier'), options=["Low", "Medium", "High"], value="Medium")
 
+    # 🔻追加: UIからのパラメータ制御 (リバランスとシミュレーション保守性)
+    st.markdown("### 🔄 リバランス設定 (Rebalance)")
+    rebalance_label = st.selectbox(
+        "実行頻度 (Frequency)",
+        ["月次 (Monthly)", "四半期 (Quarterly)", "年次 (Yearly)", "なし (Buy & Hold)"],
+        index=0 # デフォルトを月次に
+    )
+    rebalance_map = {"月次 (Monthly)": 'M', "四半期 (Quarterly)": 'Q', "年次 (Yearly)": 'Y', "なし (Buy & Hold)": None}
+    rebalance_freq = rebalance_map[rebalance_label]
+
+    st.markdown("### 🎲 シミュレーション設定 (Simulation)")
+    sim_conservatism = st.select_slider(
+        "保守性 (Fat-Tail / Regime)",
+        options=["楽観 (Optimistic)", "標準 (Standard)", "保守 (Conservative)"],
+        value="標準 (Standard)"
+    )
+    cons_map = {"楽観 (Optimistic)": 'Low', "標準 (Standard)": 'Medium', "保守 (Conservative)": 'High'}
+    conservatism_tier = cons_map[sim_conservatism]
+
     st.markdown(f"### {t('sb_sec4')}")
     st.caption(t('sb_adv_caption'))
     
@@ -181,7 +200,6 @@ with st.sidebar:
 # =========================================================
 
 if analyze_btn:
-    # 🔻修正: スピナーのメッセージを辞書から取得
     with st.spinner(t('msg_fetching_data')):
         try:
             # 1. 入力解析
@@ -199,7 +217,6 @@ if analyze_btn:
             engine = MarketDataEngine()
             valid_assets, _ = engine.validate_tickers(parsed_dict)
             if not valid_assets:
-                # 🔻修正: エラーメッセージを辞書から取得
                 st.error(t('msg_err_no_ticker'))
                 st.stop()
 
@@ -207,16 +224,23 @@ if analyze_btn:
             hist_returns = engine.fetch_historical_prices(tickers)
 
             if hist_returns.empty:
-                 # 🔻修正: エラーメッセージを辞書から取得
                  st.error(t('msg_err_price_fetch'))
                  st.stop()
 
-            weights_clean = {k: v['weight'] for k, v in valid_assets.items()}
-            port_series, final_weights = PortfolioAnalyzer.create_synthetic_history(hist_returns, weights_clean)
-
-            # 2. ベンチマーク取得
+            # 🔻修正: ベンチマーク取得を先に移動（データ補完ロジックで使用するため）
             is_jpy_bench = True if bench_ticker in ['^TPX', '^N225', '1306.T'] or bench_ticker.endswith('.T') else False
             bench_series = engine.fetch_benchmark_data(bench_ticker, is_jpy_asset=is_jpy_bench)
+
+            weights_clean = {k: v['weight'] for k, v in valid_assets.items()}
+            
+            # 🔻修正: 合成ヒストリー作成時にUIパラメータ（ベンチマークとリバランス頻度）を渡す
+            try:
+                port_series, final_weights = PortfolioAnalyzer.create_synthetic_history(
+                    hist_returns, weights_clean, benchmark_ret=bench_series, rebalance_freq=rebalance_freq
+                )
+            except TypeError:
+                # 念のためのフォールバック (engine側が未更新の場合)
+                port_series, final_weights = PortfolioAnalyzer.create_synthetic_history(hist_returns, weights_clean)
 
             # 3. ファクター取得
             french_factors = engine.fetch_french_factors(region_code)
@@ -231,6 +255,7 @@ if analyze_btn:
                 'asset_info': valid_assets,
                 'cost_tier': cost_tier,
                 'bench_name': selected_bench_label,
+                'conservatism_tier': conservatism_tier # UIで設定した保守性を保存
             }
             
             # 再計算時にキャッシュをクリア
@@ -239,7 +264,6 @@ if analyze_btn:
             st.session_state.figs = {}
 
         except Exception as e:
-            # 🔻修正: エラーメッセージを辞書から取得
             st.error(f"{t('msg_err_analysis')}{e}")
             st.stop()
 
@@ -253,6 +277,7 @@ if st.session_state.portfolio_data:
     analyzer = PortfolioAnalyzer()
     port_ret = data['returns']
     bench_ret = data['benchmark']
+    cons_tier = data.get('conservatism_tier', 'Medium')
 
     # 🌍 通貨基準（Numeraire）の設定
     curr_unit = t('currency_jpy') if st.session_state.base_currency == 'JPY' else t('currency_usd')
@@ -287,7 +312,15 @@ if st.session_state.portfolio_data:
 
     # モンテカルロ
     sim_years = 20
-    df_stats, final_values = analyzer.run_monte_carlo_simulation(port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv)
+    # 🔻修正: UIで設定した保守性(conservatism_tier)を引数として渡す（互換性担保のためtry-except）
+    try:
+        df_stats, final_values = analyzer.run_monte_carlo_simulation(
+            port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv, conservatism_tier=cons_tier
+        )
+    except TypeError:
+        df_stats, final_values = analyzer.run_monte_carlo_simulation(
+            port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv
+        )
     
     final_median = np.median(final_values)
     final_p10 = np.percentile(final_values, 10)
@@ -413,7 +446,6 @@ if st.session_state.portfolio_data:
                     fig_pca.update_layout(xaxis_title=t('pca_pc1'), yaxis_title=t('pca_pc2'), showlegend=False)
                     st.plotly_chart(fig_pca, width="stretch")
             except Exception as e:
-                # 🔻修正: 警告メッセージを辞書から取得
                 st.warning(f"{t('msg_err_pca')}{e}")
 
         with c2:
@@ -445,7 +477,6 @@ if st.session_state.portfolio_data:
 
     with tabs[1]:
         if data['factors'].empty:
-            # 🔻修正: エラーメッセージを辞書から取得
             st.error(t('msg_err_factor'))
         else:
             st.subheader(t('sub_style'))
@@ -703,7 +734,6 @@ if st.session_state.portfolio_data:
             )
             st.plotly_chart(fig_mc_hist, width="stretch")
             
-            # 🔻修正: 完了メッセージを辞書から取得
             st.success(t('msg_sim_complete'))
 
     # セッションへの保存 (分析完了フラグとグラフデータ)
