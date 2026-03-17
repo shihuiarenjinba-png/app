@@ -165,7 +165,6 @@ with st.sidebar:
     st.markdown(f"### {t('sb_sec3')}")
     cost_tier = st.select_slider(t('sb_cost_tier'), options=["Low", "Medium", "High"], value="Medium")
 
-    # 🔻修正: リバランス設定の維持
     st.markdown("### 🔄 リバランス設定 (Rebalance)")
     rebalance_label = st.selectbox(
         "実行頻度 (Frequency)",
@@ -174,8 +173,6 @@ with st.sidebar:
     )
     rebalance_map = {"月次 (Monthly)": 'M', "四半期 (Quarterly)": 'Q', "年次 (Yearly)": 'Y', "なし (Buy & Hold)": None}
     rebalance_freq = rebalance_map[rebalance_label]
-
-    # 🔻削除: シミュレーション設定（保守性スライダー）の撤去
 
     st.markdown(f"### {t('sb_sec4')}")
     st.caption(t('sb_adv_caption'))
@@ -248,7 +245,6 @@ if analyze_btn:
                 'asset_info': valid_assets,
                 'cost_tier': cost_tier,
                 'bench_name': selected_bench_label
-                # 🔻削除: conservatism_tier の保存を撤去
             }
             
             # 再計算時にキャッシュをクリア
@@ -302,7 +298,7 @@ if st.session_state.portfolio_data:
     else:
         factor_comment = "ファクターデータが不足しており分析できません。"
 
-    # 🔻修正: モンテカルロシミュレーションの実行（保守性引数を削除）
+    # モンテカルロシミュレーションの実行
     sim_years = 20
     df_stats, final_values = analyzer.run_monte_carlo_simulation(
         port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv
@@ -312,7 +308,7 @@ if st.session_state.portfolio_data:
     final_p10 = np.percentile(final_values, 10)
     final_p90 = np.percentile(final_values, 90)
     
-    # 🔻修正: 相関行列・PCAの前にデータをサニタイズ (NaNの除去)
+    # 💡 PCA等の高度な計算でのみNaNを落としてエラーを防ぐ（ヒストリカルチャートの期間縮小を防ぐため）
     comp_clean_for_analysis = data['components'].dropna()
     
     # 相関行列
@@ -520,23 +516,49 @@ if st.session_state.portfolio_data:
 
     with tabs[2]:
         st.subheader(t('graph_hist'))
-        cum_ret = (1 + port_ret).cumprod() * 10000
-        fig_hist = go.Figure()
-        fig_hist.add_trace(go.Scatter(x=cum_ret.index, y=[10000]*len(cum_ret), mode='lines', name=f"{t('label_principal')} (10,000)", line=dict(color=COLORS['principal'], width=1, dash='dot')))
-
+        
+        # 💡 【修正ポイント】描画前にポートフォリオとベンチマークの共通期間を厳密に抽出する
         if not bench_ret.empty:
-            bench_cum = (1 + bench_ret).cumprod()
-            common_idx = cum_ret.index.intersection(bench_cum.index)
-            bench_cum = bench_cum.loc[common_idx]
-            bench_cum = bench_cum / bench_cum.iloc[0] * 10000
-            fig_hist.add_trace(go.Scatter(x=bench_cum.index, y=bench_cum, mode='lines', name=t('leg_bench').format(bench=data['bench_name']), line=dict(color=COLORS['benchmark'], width=1.5)))
+            common_idx = port_ret.index.intersection(bench_ret.index)
+            port_ret_sync = port_ret.loc[common_idx]
+            bench_ret_sync = bench_ret.loc[common_idx]
+        else:
+            port_ret_sync = port_ret
+            bench_ret_sync = pd.Series(dtype=float)
 
-        fig_hist.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret, fill='tozeroy', fillcolor=COLORS['bg_fill'], mode='lines', name=t('leg_port'), line=dict(color=COLORS['main'], width=2.5)))
+        # 共通期間で「同時に」 1日目から 10,000 で累積計算スタート
+        cum_ret_sync = (1 + port_ret_sync).cumprod() * 10000
+        
+        fig_hist = go.Figure()
+        # ① 原本基準線 (10,000)
+        fig_hist.add_trace(go.Scatter(
+            x=cum_ret_sync.index, y=[10000]*len(cum_ret_sync), 
+            mode='lines', name=f"{t('label_principal')} (10,000)", 
+            line=dict(color=COLORS['principal'], width=1, dash='dot')
+        ))
+
+        # ② ベンチマーク線（完全にスケールを合わせて描画）
+        if not bench_ret_sync.empty:
+            bench_cum_sync = (1 + bench_ret_sync).cumprod() * 10000
+            fig_hist.add_trace(go.Scatter(
+                x=bench_cum_sync.index, y=bench_cum_sync, 
+                mode='lines', name=t('leg_bench').format(bench=data['bench_name']), 
+                line=dict(color=COLORS['benchmark'], width=1.5)
+            ))
+
+        # ③ ポートフォリオ線
+        fig_hist.add_trace(go.Scatter(
+            x=cum_ret_sync.index, y=cum_ret_sync, fill='tozeroy', 
+            fillcolor=COLORS['bg_fill'], mode='lines', name=t('leg_port'), 
+            line=dict(color=COLORS['main'], width=2.5)
+        ))
+        
         st.plotly_chart(fig_hist, width="stretch")
         figs_for_report['cumulative'] = fig_hist
 
+        # ドローダウンも同期された期間で計算するよう修正
         fig_dd = go.Figure()
-        dd_series = (cum_ret / cum_ret.cummax() - 1)
+        dd_series = (cum_ret_sync / cum_ret_sync.cummax() - 1)
         fig_dd.add_trace(go.Scatter(x=dd_series.index, y=dd_series, fill='tozeroy', name='Drawdown', line=dict(color='red')))
         fig_dd.update_layout(title=t('graph_dd'))
         st.plotly_chart(fig_dd, width="stretch")
