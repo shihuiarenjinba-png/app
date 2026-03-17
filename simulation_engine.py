@@ -86,6 +86,7 @@ class MarketDataEngine:
     @st.cache_data(ttl=3600*24*7)
     def fetch_french_factors(_self, region='US'):
         """Fetch Fama-French 5 Factors."""
+        # 💡【修正箇所①】ファクターデータ取得の堅牢化 (例外処理の強化とfreq='ME'の徹底)
         try:
             name = 'F-F_Research_Data_5_Factors_2x3'
             if region == 'Japan': 
@@ -98,7 +99,6 @@ class MarketDataEngine:
             
             # Process data if successful
             ff_data = ff_data / 100.0
-            # Pandas最新版対応: freq='M' -> freq='MS' (Month Start) または 'ME'
             ff_data.index = ff_data.index.to_timestamp(freq='ME')
             
             if ff_data.index.tz is not None: 
@@ -148,7 +148,6 @@ class MarketDataEngine:
                 else:
                     data = raw_data
 
-            # Pandas最新版対応: 'M' -> 'ME'
             data = data.resample('ME').last().ffill()
             if data.index.tz is not None:
                 data.index = data.index.tz_localize(None)
@@ -173,7 +172,6 @@ class MarketDataEngine:
             else:
                 data_final = data
 
-            # .dropna() を外し和集合(Union)を維持。データ欠損部はNaNとして残す
             returns = data_final.pct_change().dropna(how='all')
             
             valid_cols = [c for c in returns.columns if c in tickers]
@@ -205,7 +203,6 @@ class MarketDataEngine:
             if isinstance(data, pd.DataFrame):
                 data = data.iloc[:, 0]
 
-            # Pandas最新版対応: 'M' -> 'ME'
             data = data.resample('ME').last().ffill()
             if data.index.tz is not None:
                 data.index = data.index.tz_localize(None)
@@ -227,7 +224,6 @@ class MarketDataEngine:
 
 class PortfolioAnalyzer:
     
-    # 動的リバランスとNaN補完（自動承継）の実装
     @staticmethod
     def create_synthetic_history(returns_df, weights_dict, benchmark_ret=None, rebalance_freq='M'):
         valid_tickers = [t for t in weights_dict.keys() if t in returns_df.columns]
@@ -238,43 +234,36 @@ class PortfolioAnalyzer:
         total_weight = sum(filtered_weights.values())
         norm_weights = {k: v/total_weight for k, v in filtered_weights.items()}
         
-        # 1. NaN補完ロジック (IPO前・上場廃止後の自動承継)
         filled_returns = returns_df[valid_tickers].copy()
         if benchmark_ret is not None:
             for col in filled_returns.columns:
                 filled_returns[col] = filled_returns[col].fillna(benchmark_ret)
         else:
-            # ベンチマーク未指定時は、その月の残存銘柄の平均値で補完（疑似ベンチマーク）
             row_mean = filled_returns.mean(axis=1)
             for col in filled_returns.columns:
                 filled_returns[col] = filled_returns[col].fillna(row_mean).fillna(0)
                 
-        # 2. 動的リバランスの実行
         port_ret_list = []
         current_weights = pd.Series(norm_weights)
         
         for date, row in filled_returns.iterrows():
-            # 当月のリターン計算
             ret = (current_weights * row).sum()
             port_ret_list.append(ret)
             
-            # ウェイトの自然変動（ドリフト）
             current_weights = current_weights * (1 + row)
             if current_weights.sum() > 0:
                 current_weights /= current_weights.sum()
             else:
-                current_weights = pd.Series(norm_weights) # 全ロス時はリセット
+                current_weights = pd.Series(norm_weights) 
             
-            # リバランス判定
             do_rebalance = False
-            if rebalance_freq == 'M':   # 月次リバランス
+            if rebalance_freq == 'M':   
                 do_rebalance = True
-            elif rebalance_freq == 'Q' and date.month in [3, 6, 9, 12]:  # 四半期リバランス
+            elif rebalance_freq == 'Q' and date.month in [3, 6, 9, 12]:  
                 do_rebalance = True
-            elif rebalance_freq == 'Y' and date.month == 12:  # 年次リバランス
+            elif rebalance_freq == 'Y' and date.month == 12:  
                 do_rebalance = True
                 
-            # ウェイトのリセット
             if do_rebalance:
                 current_weights = pd.Series(norm_weights)
                 
@@ -292,12 +281,20 @@ class PortfolioAnalyzer:
         if port_ret.empty or factor_df is None or factor_df.empty:
             return None, None
 
+        # 💡【修正箇所②】回帰分析時のデータ期間の厳密な同期
         df_y = port_ret.to_frame(name='y')
-        df_y['period'] = df_y.index.to_period('M') 
         df_x = factor_df.copy()
-        df_x['period'] = df_x.index.to_period('M') 
         
-        merged = pd.merge(df_y, df_x, on='period', how='inner').dropna()
+        # 月次レベルで正確に一致させるため、indexをPeriod(月)に変換
+        df_y.index = df_y.index.to_period('M') 
+        df_x.index = df_x.index.to_period('M') 
+        
+        # 共通の期間を抽出して結合
+        common_idx = df_y.index.intersection(df_x.index)
+        if common_idx.empty:
+            return None, None
+            
+        merged = pd.concat([df_y.loc[common_idx], df_x.loc[common_idx]], axis=1).dropna()
         if merged.empty: return None, None
         
         y = merged['y']
@@ -314,7 +311,6 @@ class PortfolioAnalyzer:
         except:
             return None, None
 
-    # 🔻修正: 伝統的な幾何ブラウン運動（GBM）への完全移行と数学的ロックの実装
     @staticmethod
     def run_monte_carlo_simulation(port_ret, n_years=20, n_simulations=7500, initial_investment=1000000):
         if port_ret.empty:
@@ -322,35 +318,24 @@ class PortfolioAnalyzer:
 
         n_months = n_years * 12
         
-        # 欠損値（NaN）による計算エラーを防ぐため事前にdropna()を実行
         clean_ret = port_ret.dropna()
         if clean_ret.empty:
             return None, None
 
-        # 【数学的ロック】
-        # 算術平均による上振れバグ（複利爆発）を防ぐため、「対数リターン（幾何平均）」で成長軸を固定します。
-        # これにより、シミュレーションの中央値(p50)が、実際の過去のCAGRと完全に一致するようになります。
         log_returns = np.log(1 + clean_ret)
-        mu_log = log_returns.mean()    # 真の月次成長率（これがそのままGBMのドリフトになります）
-        sigma_log = log_returns.std()  # 真の月次ボラティリティ
+        mu_log = log_returns.mean()    
+        sigma_log = log_returns.std()  
         
-        # forループを排除し、NumPyのベクトル演算で一括生成（高速化）
-        # 標準的な正規分布によるランダムショック
         Z = np.random.normal(0, 1, (n_months, n_simulations))
-        
-        # 伝統的なGBMによる月次リターンの生成
         monthly_returns = np.exp(mu_log + sigma_log * Z)
         
-        # 累積リターンを一括計算し、資産推移パスを作成
         price_paths = np.zeros((n_months + 1, n_simulations))
         price_paths[0] = initial_investment
         price_paths[1:] = initial_investment * np.cumprod(monthly_returns, axis=0)
         
         last_date = clean_ret.index[-1]
-        # Pandas最新版対応: freq='M' -> freq='ME' (Month End)
         future_dates = pd.date_range(start=last_date, periods=n_months + 1, freq='ME')
         
-        # パーセンタイルの抽出
         percentiles = [10, 50, 90]
         stats_data = np.percentile(price_paths, percentiles, axis=1)
         df_stats = pd.DataFrame(stats_data.T, index=future_dates, columns=['p10', 'p50', 'p90'])
@@ -385,18 +370,36 @@ class PortfolioAnalyzer:
         
         p_df = port_ret.to_frame(name='p')
         b_df = bench_ret.to_frame(name='b')
-        p_df['period'] = p_df.index.to_period('M')
-        b_df['period'] = b_df.index.to_period('M')
         
-        merged = pd.merge(p_df, b_df, on='period', how='inner').dropna()
+        # 💡【修正箇所②】共通期間の厳密な同期
+        p_df.index = p_df.index.to_period('M')
+        b_df.index = b_df.index.to_period('M')
         
-        if len(merged) < 12: return np.nan, np.nan
+        common_idx = p_df.index.intersection(b_df.index)
+        if common_idx.empty or len(common_idx) < 12: 
+            return np.nan, np.nan
+            
+        merged = pd.concat([p_df.loc[common_idx], b_df.loc[common_idx]], axis=1).dropna()
+        if len(merged) < 12: 
+            return np.nan, np.nan
         
+        # 💡【修正箇所③】幾何平均（複利）ベースの計算への統一
+        # ポートフォリオとベンチマークの累積リターンから現実のCAGRを算出
+        cum_p = (1 + merged['p']).cumprod()
+        cum_b = (1 + merged['b']).cumprod()
+        
+        years = len(merged) / 12
+        cagr_p = (cum_p.iloc[-1]) ** (1 / years) - 1
+        cagr_b = (cum_b.iloc[-1]) ** (1 / years) - 1
+        
+        annualized_active_return = cagr_p - cagr_b
+        
+        # トラッキングエラー（リスク）は差分の標準偏差から算出
         active_ret = merged['p'] - merged['b']
-        mean_active = active_ret.mean() * 12
         tracking_error = active_ret.std() * np.sqrt(12)
+        
         if tracking_error == 0: return np.nan, 0.0
-        return mean_active / tracking_error, tracking_error
+        return annualized_active_return / tracking_error, tracking_error
 
     @staticmethod
     def perform_pca(returns_df):
@@ -419,16 +422,22 @@ class PortfolioAnalyzer:
         if factor_df is None or factor_df.empty or port_ret.empty:
             return pd.DataFrame()
 
+        # 💡【修正箇所②】回帰分析時のデータ期間の厳密な同期
         df_y = port_ret.to_frame(name='y')
-        df_y['period'] = df_y.index.to_period('M') 
         df_x = factor_df.copy()
-        df_x['period'] = df_x.index.to_period('M') 
         
-        merged = pd.merge(df_y, df_x, on='period', how='inner').dropna()
+        df_y.index = df_y.index.to_period('M') 
+        df_x.index = df_x.index.to_period('M') 
+        
+        common_idx = df_y.index.intersection(df_x.index)
+        if common_idx.empty: 
+            return pd.DataFrame()
+            
+        merged = pd.concat([df_y.loc[common_idx], df_x.loc[common_idx]], axis=1).dropna()
         if merged.empty: return pd.DataFrame()
         
         y = merged['y']
-        X_cols = [c for c in merged.columns if c not in ['y', 'period']]
+        X_cols = [c for c in merged.columns if c != 'y']
         X = merged[X_cols]
         
         data_len = len(y)
@@ -444,6 +453,9 @@ class PortfolioAnalyzer:
             params = rres.params.copy()
             if 'const' in params.columns:
                 params = params.drop(columns=['const'])
+            
+            # Plotly描画時にエラーが出ないよう、Timestamp型に戻す
+            params.index = params.index.to_timestamp()
             return params.dropna()
         except:
             return pd.DataFrame()
