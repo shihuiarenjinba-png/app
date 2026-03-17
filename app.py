@@ -165,7 +165,7 @@ with st.sidebar:
     st.markdown(f"### {t('sb_sec3')}")
     cost_tier = st.select_slider(t('sb_cost_tier'), options=["Low", "Medium", "High"], value="Medium")
 
-    # 🔻追加: UIからのパラメータ制御 (リバランスとシミュレーション保守性)
+    # 🔻修正: リバランス設定の維持
     st.markdown("### 🔄 リバランス設定 (Rebalance)")
     rebalance_label = st.selectbox(
         "実行頻度 (Frequency)",
@@ -175,14 +175,7 @@ with st.sidebar:
     rebalance_map = {"月次 (Monthly)": 'M', "四半期 (Quarterly)": 'Q', "年次 (Yearly)": 'Y', "なし (Buy & Hold)": None}
     rebalance_freq = rebalance_map[rebalance_label]
 
-    st.markdown("### 🎲 シミュレーション設定 (Simulation)")
-    sim_conservatism = st.select_slider(
-        "保守性 (Fat-Tail / Regime)",
-        options=["楽観 (Optimistic)", "標準 (Standard)", "保守 (Conservative)"],
-        value="標準 (Standard)"
-    )
-    cons_map = {"楽観 (Optimistic)": 'Low', "標準 (Standard)": 'Medium', "保守 (Conservative)": 'High'}
-    conservatism_tier = cons_map[sim_conservatism]
+    # 🔻削除: シミュレーション設定（保守性スライダー）の撤去
 
     st.markdown(f"### {t('sb_sec4')}")
     st.caption(t('sb_adv_caption'))
@@ -227,13 +220,13 @@ if analyze_btn:
                  st.error(t('msg_err_price_fetch'))
                  st.stop()
 
-            # 🔻修正: ベンチマーク取得を先に移動（データ補完ロジックで使用するため）
+            # ベンチマーク取得を先に実行（データ補完ロジックで使用するため）
             is_jpy_bench = True if bench_ticker in ['^TPX', '^N225', '1306.T'] or bench_ticker.endswith('.T') else False
             bench_series = engine.fetch_benchmark_data(bench_ticker, is_jpy_asset=is_jpy_bench)
 
             weights_clean = {k: v['weight'] for k, v in valid_assets.items()}
             
-            # 🔻修正: 合成ヒストリー作成時にUIパラメータ（ベンチマークとリバランス頻度）を渡す
+            # 合成ヒストリー作成時にUIパラメータ（ベンチマークとリバランス頻度）を渡す
             try:
                 port_series, final_weights = PortfolioAnalyzer.create_synthetic_history(
                     hist_returns, weights_clean, benchmark_ret=bench_series, rebalance_freq=rebalance_freq
@@ -254,8 +247,8 @@ if analyze_btn:
                 'factors': french_factors,
                 'asset_info': valid_assets,
                 'cost_tier': cost_tier,
-                'bench_name': selected_bench_label,
-                'conservatism_tier': conservatism_tier # UIで設定した保守性を保存
+                'bench_name': selected_bench_label
+                # 🔻削除: conservatism_tier の保存を撤去
             }
             
             # 再計算時にキャッシュをクリア
@@ -277,7 +270,6 @@ if st.session_state.portfolio_data:
     analyzer = PortfolioAnalyzer()
     port_ret = data['returns']
     bench_ret = data['benchmark']
-    cons_tier = data.get('conservatism_tier', 'Medium')
 
     # 🌍 通貨基準（Numeraire）の設定
     curr_unit = t('currency_jpy') if st.session_state.base_currency == 'JPY' else t('currency_usd')
@@ -310,30 +302,27 @@ if st.session_state.portfolio_data:
     else:
         factor_comment = "ファクターデータが不足しており分析できません。"
 
-    # モンテカルロ
+    # 🔻修正: モンテカルロシミュレーションの実行（保守性引数を削除）
     sim_years = 20
-    # 🔻修正: UIで設定した保守性(conservatism_tier)を引数として渡す（互換性担保のためtry-except）
-    try:
-        df_stats, final_values = analyzer.run_monte_carlo_simulation(
-            port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv, conservatism_tier=cons_tier
-        )
-    except TypeError:
-        df_stats, final_values = analyzer.run_monte_carlo_simulation(
-            port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv
-        )
+    df_stats, final_values = analyzer.run_monte_carlo_simulation(
+        port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv
+    )
     
     final_median = np.median(final_values)
     final_p10 = np.percentile(final_values, 10)
     final_p90 = np.percentile(final_values, 90)
     
+    # 🔻修正: 相関行列・PCAの前にデータをサニタイズ (NaNの除去)
+    comp_clean_for_analysis = data['components'].dropna()
+    
     # 相関行列
-    corr_matrix = analyzer.calculate_correlation_matrix(data['components'])
+    corr_matrix = analyzer.calculate_correlation_matrix(comp_clean_for_analysis)
     fig_corr_report = None
     if not corr_matrix.empty:
         fig_corr_report = px.imshow(corr_matrix, text_auto='.2f', aspect="auto", color_continuous_scale='RdBu_r', zmin=-1, zmax=1)
 
     # AI診断 & PCA
-    pca_ratio, _ = analyzer.perform_pca(data['components'])
+    pca_ratio, _ = analyzer.perform_pca(comp_clean_for_analysis)
     report = PortfolioDiagnosticEngine.generate_report(data['weights'], pca_ratio, port_ret, lang=st.session_state.lang)
 
     # 詳細レビュー生成
@@ -434,11 +423,10 @@ if st.session_state.portfolio_data:
             
             st.markdown(t('sub_pca_map'))
             try:
-                comp_clean = data['components'].dropna()
-                if not comp_clean.empty and comp_clean.shape[1] > 1:
+                if not comp_clean_for_analysis.empty and comp_clean_for_analysis.shape[1] > 1:
                     pca = PCA(n_components=2)
-                    pca_coords = pca.fit_transform(comp_clean.T)
-                    labels = comp_clean.columns
+                    pca_coords = pca.fit_transform(comp_clean_for_analysis.T)
+                    labels = comp_clean_for_analysis.columns
                     
                     fig_pca = px.scatter(x=pca_coords[:, 0], y=pca_coords[:, 1], text=labels, 
                                          color=labels, title=t('graph_pca'))
@@ -739,7 +727,6 @@ if st.session_state.portfolio_data:
     # セッションへの保存 (分析完了フラグとグラフデータ)
     st.session_state.analysis_done = True
     st.session_state.figs = figs_for_report
-
 
 # =========================================================
 # 📄 PDF ダウンロードセクション
