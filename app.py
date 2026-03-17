@@ -345,8 +345,7 @@ if st.session_state.portfolio_data:
 
     detailed_review_str = "\n".join(detailed_review)
 
-    # =========================================================
-    # 🛡️ Payload 作成
+ # 🛡️ Payload 作成
     # =========================================================
     st.session_state.payload = {
         'lang': st.session_state.lang,
@@ -392,7 +391,8 @@ if st.session_state.portfolio_data:
     # --- 4. ビジュアライゼーション表示 ---
     st.markdown("---")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    # 💡 修正: metricsが詰まりすぎないようgapを追加
+    c1, c2, c3, c4, c5 = st.columns(5, gap="small")
     c1.metric(t('metric_cagr'), f"{cagr:.2%}")
     c2.metric(t('metric_vol'), f"{vol:.2%}")
     c3.metric(t('metric_maxdd'), f"{max_dd:.2%}", delta_color="inverse")
@@ -405,7 +405,7 @@ if st.session_state.portfolio_data:
     tabs = st.tabs(t('tab_names'))
 
     with tabs[0]:
-        c1, c2 = st.columns([1, 1])
+        c1, c2 = st.columns([1, 1], gap="medium")
         with c1:
             st.subheader(t('sub_pca'))
             fig_gauge = go.Figure(go.Indicator(
@@ -415,7 +415,8 @@ if st.session_state.portfolio_data:
                          'steps': [{'range': [0, 60], 'color': "#333"}, {'range': [60, 100], 'color': "#555"}],
                          'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 85}}
             ))
-            st.plotly_chart(fig_gauge, width="stretch")
+            # 💡 修正: width="stretch" を use_container_width=True に変更
+            st.plotly_chart(fig_gauge, use_container_width=True)
             
             st.markdown(t('sub_pca_map'))
             try:
@@ -428,14 +429,14 @@ if st.session_state.portfolio_data:
                                          color=labels, title=t('graph_pca'))
                     fig_pca.update_traces(textposition='top center', marker=dict(size=12))
                     fig_pca.update_layout(xaxis_title=t('pca_pc1'), yaxis_title=t('pca_pc2'), showlegend=False)
-                    st.plotly_chart(fig_pca, width="stretch")
+                    st.plotly_chart(fig_pca, use_container_width=True)
             except Exception as e:
                 st.warning(f"{t('msg_err_pca')}{e}")
 
         with c2:
             st.subheader(t('graph_alloc'))
             fig_pie = px.pie(values=list(data['weights'].values()), names=list(data['weights'].keys()), hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
-            st.plotly_chart(fig_pie, width="stretch")
+            st.plotly_chart(fig_pie, use_container_width=True)
             figs_for_report['allocation'] = fig_pie
             
             st.markdown("---")
@@ -457,7 +458,7 @@ if st.session_state.portfolio_data:
             num_assets = len(data['components'].columns)
             corr_height = max(400, 200 + (num_assets * 30))
             fig_corr_report.update_layout(height=corr_height)
-            st.plotly_chart(fig_corr_report, width="stretch")
+            st.plotly_chart(fig_corr_report, use_container_width=True)
 
     with tabs[1]:
         if data['factors'].empty:
@@ -465,7 +466,7 @@ if st.session_state.portfolio_data:
         else:
             st.subheader(t('sub_style'))
             if params is not None:
-                c1, c2 = st.columns([1, 1])
+                c1, c2 = st.columns([1, 1], gap="medium")
                 with c1:
                     beta_df = params.drop('const') if 'const' in params else params
                     colors = ['#00CC96' if x > 0 else '#FF4B4B' for x in beta_df.values]
@@ -474,7 +475,7 @@ if st.session_state.portfolio_data:
                         marker_color=colors, text=[f"{x:.2f}" for x in beta_df.values], textposition='auto'
                     ))
                     fig_beta.update_layout(title=t('graph_beta'), xaxis_title="感応度", height=300)
-                    st.plotly_chart(fig_beta, width="stretch")
+                    st.plotly_chart(fig_beta, use_container_width=True)
                     st.caption(f"決定係数 (R²): {r_sq:.2%} (モデル説明力)")
                     figs_for_report['factors'] = fig_beta
                 
@@ -510,14 +511,13 @@ if st.session_state.portfolio_data:
                         fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas[c], name=c))
 
                 fig_roll.update_layout(title=t('graph_roll'), yaxis_title="Beta", height=400)
-                st.plotly_chart(fig_roll, width="stretch")
+                st.plotly_chart(fig_roll, use_container_width=True)
             else:
                 st.info(t('msg_rolling_req'))
 
     with tabs[2]:
         st.subheader(t('graph_hist'))
         
-        # 💡 【修正ポイント】描画前にポートフォリオとベンチマークの共通期間を厳密に抽出する
         if not bench_ret.empty:
             common_idx = port_ret.index.intersection(bench_ret.index)
             port_ret_sync = port_ret.loc[common_idx]
@@ -526,18 +526,15 @@ if st.session_state.portfolio_data:
             port_ret_sync = port_ret
             bench_ret_sync = pd.Series(dtype=float)
 
-        # 共通期間で「同時に」 1日目から 10,000 で累積計算スタート
         cum_ret_sync = (1 + port_ret_sync).cumprod() * 10000
         
         fig_hist = go.Figure()
-        # ① 原本基準線 (10,000)
         fig_hist.add_trace(go.Scatter(
             x=cum_ret_sync.index, y=[10000]*len(cum_ret_sync), 
             mode='lines', name=f"{t('label_principal')} (10,000)", 
             line=dict(color=COLORS['principal'], width=1, dash='dot')
         ))
 
-        # ② ベンチマーク線（完全にスケールを合わせて描画）
         if not bench_ret_sync.empty:
             bench_cum_sync = (1 + bench_ret_sync).cumprod() * 10000
             fig_hist.add_trace(go.Scatter(
@@ -546,22 +543,20 @@ if st.session_state.portfolio_data:
                 line=dict(color=COLORS['benchmark'], width=1.5)
             ))
 
-        # ③ ポートフォリオ線
         fig_hist.add_trace(go.Scatter(
             x=cum_ret_sync.index, y=cum_ret_sync, fill='tozeroy', 
             fillcolor=COLORS['bg_fill'], mode='lines', name=t('leg_port'), 
             line=dict(color=COLORS['main'], width=2.5)
         ))
         
-        st.plotly_chart(fig_hist, width="stretch")
+        st.plotly_chart(fig_hist, use_container_width=True)
         figs_for_report['cumulative'] = fig_hist
 
-        # ドローダウンも同期された期間で計算するよう修正
         fig_dd = go.Figure()
         dd_series = (cum_ret_sync / cum_ret_sync.cummax() - 1)
         fig_dd.add_trace(go.Scatter(x=dd_series.index, y=dd_series, fill='tozeroy', name='Drawdown', line=dict(color='red')))
         fig_dd.update_layout(title=t('graph_dd'))
-        st.plotly_chart(fig_dd, width="stretch")
+        st.plotly_chart(fig_dd, use_container_width=True)
         figs_for_report['drawdown'] = fig_dd
 
         st.markdown("---")
@@ -584,7 +579,7 @@ if st.session_state.portfolio_data:
             fig_dist.add_trace(go.Scatter(x=x_range, y=y_norm, mode='lines', name=t('leg_norm_dist'), line=dict(color='white', dash='dash', width=2)))
         
         fig_dist.update_layout(title=t('graph_dist'), xaxis_title=t('dist_ret'), yaxis_title=t('dist_density'), height=400)
-        st.plotly_chart(fig_dist, width="stretch")
+        st.plotly_chart(fig_dist, use_container_width=True)
 
     with tabs[3]:
         st.subheader(t('sub_cost_sim'))
@@ -594,36 +589,32 @@ if st.session_state.portfolio_data:
             gross, net, loss, cost_pct = sim_res
         else:
             gross, net, loss = sim_res
-            cost_pct = 0.0 # fallback
+            cost_pct = 0.0 
         
         loss_amount = init_inv * loss
         final_amount_net = init_inv * net.iloc[-1]
         
-        c1, c2 = st.columns([3, 1])
+        c1, c2 = st.columns([3, 1], gap="medium")
         with c1:
             fig_cost = go.Figure()
-            # 下層: 実質リターン
             fig_cost.add_trace(go.Scatter(
                 x=net.index, y=net, 
-                mode='lines', 
-                stackgroup='one', 
+                mode='lines', stackgroup='one', 
                 name=t('leg_net_asset'), 
                 line=dict(color=COLORS['main'], width=2),
                 fillcolor='rgba(0, 255, 255, 0.2)'
             ))
-            # 上層: 失われたコスト (差分)
             loss_series = gross - net
             fig_cost.add_trace(go.Scatter(
                 x=gross.index, y=loss_series, 
-                mode='lines', 
-                stackgroup='one', 
+                mode='lines', stackgroup='one', 
                 name=t('leg_cost_loss'), 
                 line=dict(color='rgba(255, 99, 71, 0.5)', width=0),
                 fillcolor='rgba(255, 99, 71, 0.3)'
             ))
             
             fig_cost.update_layout(title=t('graph_cost'), xaxis_title=t('label_months'), yaxis_title=t('label_multiple'))
-            st.plotly_chart(fig_cost, width="stretch")
+            st.plotly_chart(fig_cost, use_container_width=True)
             
         with c2:
             st.error(t('msg_lost_val').format(loss_amount=f"{loss_amount:,.0f}", curr_unit=curr_unit))
@@ -670,7 +661,7 @@ if st.session_state.portfolio_data:
                 yaxis={'categoryorder':'total ascending'},
                 height=dynamic_height
             )
-            st.plotly_chart(fig_rel, width="stretch")
+            st.plotly_chart(fig_rel, use_container_width=True)
             
             st.markdown(t('sub_attr_abs'))
             st.caption(t('cap_attr_abs'))
@@ -687,7 +678,7 @@ if st.session_state.portfolio_data:
                 yaxis={'categoryorder':'total ascending'},
                 height=dynamic_height
             )
-            st.plotly_chart(fig_abs, width="stretch")
+            st.plotly_chart(fig_abs, use_container_width=True)
 
             figs_for_report['attribution'] = fig_rel
 
@@ -700,13 +691,13 @@ if st.session_state.portfolio_data:
             fig_mc.add_trace(go.Scatter(x=df_stats.index, y=df_stats['p90'], mode='lines', name=t('leg_mc_p90'), line=dict(color=COLORS['p90'], width=1, dash='dot')))
             
             fig_mc.update_layout(title=f"{t('graph_mc')} ({t('label_principal')}: {init_inv:,} {curr_unit})", yaxis_title=f"{t('label_val')} ({curr_unit})", height=500)
-            st.plotly_chart(fig_mc, width="stretch")
+            st.plotly_chart(fig_mc, use_container_width=True)
             figs_for_report['monte_carlo'] = fig_mc
 
             st.markdown(t('sub_mc_dist'))
             final_mean = np.mean(final_values)
 
-            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1, mc2, mc3, mc4 = st.columns(4, gap="small")
             mc1.metric(t('mc_pes'), f"{final_p10:,.0f}", delta_color="inverse")
             mc2.metric(t('mc_med'), f"{final_median:,.0f}")
             mc3.metric(t('mc_mean'), f"{final_mean:,.0f}")
@@ -742,7 +733,7 @@ if st.session_state.portfolio_data:
                 xaxis=dict(range=[0, x_max_view]), 
                 yaxis=dict(range=[0, y_max_freq * 1.4])
             )
-            st.plotly_chart(fig_mc_hist, width="stretch")
+            st.plotly_chart(fig_mc_hist, use_container_width=True)
             
             st.success(t('msg_sim_complete'))
 
@@ -759,7 +750,7 @@ if st.session_state.analysis_done:
     st.header(t('pdf_section_title'))
     st.caption(t('pdf_section_caption'))
 
-    col_gen, col_dl = st.columns([1, 1])
+    col_gen, col_dl = st.columns([1, 1], gap="medium")
 
     # PDF作成ボタン
     with col_gen:
