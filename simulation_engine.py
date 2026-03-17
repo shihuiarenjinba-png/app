@@ -73,7 +73,8 @@ class MarketDataEngine:
             if isinstance(usdjpy, pd.DataFrame):
                 usdjpy = usdjpy.iloc[:, 0]
 
-            usdjpy = usdjpy.resample('M').last().ffill()
+            # Pandas最新版対応: 'M' -> 'ME'
+            usdjpy = usdjpy.resample('ME').last().ffill()
             if usdjpy.index.tz is not None: 
                 usdjpy.index = usdjpy.index.tz_localize(None)
             
@@ -97,7 +98,8 @@ class MarketDataEngine:
             
             # Process data if successful
             ff_data = ff_data / 100.0
-            ff_data.index = ff_data.index.to_timestamp(freq='M')
+            # Pandas最新版対応: freq='M' -> freq='MS' (Month Start) または 'ME'
+            ff_data.index = ff_data.index.to_timestamp(freq='ME')
             
             if ff_data.index.tz is not None: 
                 ff_data.index = ff_data.index.tz_localize(None)
@@ -111,7 +113,7 @@ class MarketDataEngine:
                 elif region == 'Global': name = 'Global_3_Factors'
                 ff_data = web.DataReader(name, 'famafrench', start=_self.start_date, end=_self.end_date)[0]
                 ff_data = ff_data / 100.0
-                ff_data.index = ff_data.index.to_timestamp(freq='M')
+                ff_data.index = ff_data.index.to_timestamp(freq='ME')
                 if ff_data.index.tz is not None: ff_data.index = ff_data.index.tz_localize(None)
                 return ff_data
             except Exception:
@@ -146,7 +148,8 @@ class MarketDataEngine:
                 else:
                     data = raw_data
 
-            data = data.resample('M').last().ffill()
+            # Pandas最新版対応: 'M' -> 'ME'
+            data = data.resample('ME').last().ffill()
             if data.index.tz is not None:
                 data.index = data.index.tz_localize(None)
 
@@ -202,7 +205,8 @@ class MarketDataEngine:
             if isinstance(data, pd.DataFrame):
                 data = data.iloc[:, 0]
 
-            data = data.resample('M').last().ffill()
+            # Pandas最新版対応: 'M' -> 'ME'
+            data = data.resample('ME').last().ffill()
             if data.index.tz is not None:
                 data.index = data.index.tz_localize(None)
 
@@ -318,10 +322,15 @@ class PortfolioAnalyzer:
 
         n_months = n_years * 12
         
+        # 欠損値（NaN）による計算エラーを防ぐため事前にdropna()を実行
+        clean_ret = port_ret.dropna()
+        if clean_ret.empty:
+            return None, None
+
         # 【数学的ロック】
         # 算術平均による上振れバグ（複利爆発）を防ぐため、「対数リターン（幾何平均）」で成長軸を固定します。
         # これにより、シミュレーションの中央値(p50)が、実際の過去のCAGRと完全に一致するようになります。
-        log_returns = np.log(1 + port_ret)
+        log_returns = np.log(1 + clean_ret)
         mu_log = log_returns.mean()    # 真の月次成長率（これがそのままGBMのドリフトになります）
         sigma_log = log_returns.std()  # 真の月次ボラティリティ
         
@@ -337,8 +346,9 @@ class PortfolioAnalyzer:
         price_paths[0] = initial_investment
         price_paths[1:] = initial_investment * np.cumprod(monthly_returns, axis=0)
         
-        last_date = port_ret.index[-1]
-        future_dates = pd.date_range(start=last_date, periods=n_months + 1, freq='M')
+        last_date = clean_ret.index[-1]
+        # Pandas最新版対応: freq='M' -> freq='ME' (Month End)
+        future_dates = pd.date_range(start=last_date, periods=n_months + 1, freq='ME')
         
         # パーセンタイルの抽出
         percentiles = [10, 50, 90]
