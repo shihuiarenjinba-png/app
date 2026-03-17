@@ -310,27 +310,27 @@ class PortfolioAnalyzer:
         except:
             return None, None
 
-    # 🔻修正: 伝統的な幾何ブラウン運動（GBM）への完全移行と高速化
+    # 🔻修正: 伝統的な幾何ブラウン運動（GBM）への完全移行と数学的ロックの実装
     @staticmethod
     def run_monte_carlo_simulation(port_ret, n_years=20, n_simulations=7500, initial_investment=1000000):
         if port_ret.empty:
             return None, None
 
-        # 過去データから「算術平均」と「標準偏差」を算出
-        mu_monthly = port_ret.mean()
-        sigma_monthly = port_ret.std()
-        
         n_months = n_years * 12
         
-        # GBMのドリフト項 (期待リターン - ボラティリティによる減価)
-        drift = mu_monthly - 0.5 * (sigma_monthly ** 2)
+        # 【数学的ロック】
+        # 算術平均による上振れバグ（複利爆発）を防ぐため、「対数リターン（幾何平均）」で成長軸を固定します。
+        # これにより、シミュレーションの中央値(p50)が、実際の過去のCAGRと完全に一致するようになります。
+        log_returns = np.log(1 + port_ret)
+        mu_log = log_returns.mean()    # 真の月次成長率（これがそのままGBMのドリフトになります）
+        sigma_log = log_returns.std()  # 真の月次ボラティリティ
         
         # forループを排除し、NumPyのベクトル演算で一括生成（高速化）
         # 標準的な正規分布によるランダムショック
         Z = np.random.normal(0, 1, (n_months, n_simulations))
         
-        # GBMの公式に基づく月次リターンの生成
-        monthly_returns = np.exp(drift + sigma_monthly * Z)
+        # 伝統的なGBMによる月次リターンの生成
+        monthly_returns = np.exp(mu_log + sigma_log * Z)
         
         # 累積リターンを一括計算し、資産推移パスを作成
         price_paths = np.zeros((n_months + 1, n_simulations))
