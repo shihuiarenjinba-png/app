@@ -64,18 +64,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
 # =========================================================
 # 🌍 共通言語辞書（Dictionary）の実装
 # =========================================================
-# 翻訳呼び出し用のヘルパー関数
 def t(key):
     lang = st.session_state.get('lang', 'JA')
     if lang == 'JA':
         return ja.TEXTS.get(key, key)
     else:
         return en.TEXTS.get(key, key)
-
 
 # =========================================================
 # 🛠️ セッション状態の初期化
@@ -99,7 +96,6 @@ if 'figs' not in st.session_state:
 st.title(t('title'))
 st.caption(t('caption'))
 
-
 # =========================================================
 # 🏗️ サイドバー: ポートフォリオ設定
 # =========================================================
@@ -118,13 +114,10 @@ with st.sidebar:
     st.session_state.base_currency = selected_curr
     
     st.markdown("---")
-
     st.header(t('sidebar_settings'))
-
     st.markdown(f"### {t('sb_sec1')}")
     
     uploaded_file = st.file_uploader(t('sb_upload_csv'), type=['csv'], help=t('sb_upload_help'))
-    
     default_input = "SPY: 40, VWO: 20, 7203.T: 20, GLD: 20"
     
     if uploaded_file is not None:
@@ -144,12 +137,12 @@ with st.sidebar:
     input_text = st.text_area(t('sb_ticker_input'), value=default_input, height=100)
 
     st.markdown(f"### {t('sb_sec2')}")
-    
     target_region = st.selectbox(t('sb_region'), ["US (米国)", "Japan (日本)", "Global (全世界)"], index=0)
     region_code = target_region.split()[0]
     
+    # 💡【修正箇所】デフォルトベンチマークをSPY（配当込み）に変更
     bench_options = {
-        'US': {'S&P 500 (^GSPC)': '^GSPC', 'NASDAQ 100 (^NDX)': '^NDX'},
+        'US': {'S&P 500 (SPY)': 'SPY', 'NASDAQ 100 (^NDX)': '^NDX'},
         'Japan': {'TOPIX (1306 ETF)': '1306.T', '日経平均 (^N225)': '^N225'},
         'Global': {'VT (全世界株式)': 'VT', 'MSCI ACWI (指数)': 'ACWI'}
     }
@@ -158,7 +151,7 @@ with st.sidebar:
     selected_bench_label = st.selectbox(t('sb_bench'), current_bench_options, index=0)
 
     if selected_bench_label == "Custom":
-        bench_ticker = st.text_input(t('sb_custom_bench'), value="^GSPC")
+        bench_ticker = st.text_input(t('sb_custom_bench'), value="SPY")
     else:
         bench_ticker = bench_options[region_code][selected_bench_label]
 
@@ -169,7 +162,7 @@ with st.sidebar:
     rebalance_label = st.selectbox(
         "実行頻度 (Frequency)",
         ["月次 (Monthly)", "四半期 (Quarterly)", "年次 (Yearly)", "なし (Buy & Hold)"],
-        index=0 # デフォルトを月次に
+        index=0 
     )
     rebalance_map = {"月次 (Monthly)": 'M', "四半期 (Quarterly)": 'Q', "年次 (Yearly)": 'Y', "なし (Buy & Hold)": None}
     rebalance_freq = rebalance_map[rebalance_label]
@@ -178,12 +171,10 @@ with st.sidebar:
     st.caption(t('sb_adv_caption'))
     
     default_note = t('default_advisor_note')
-    advisor_note = st.text_area(t('sb_adv_label'), 
-                                value=default_note,
-                                height=100)
+    advisor_note = st.text_area(t('sb_adv_label'), value=default_note, height=100)
 
     st.markdown("---")
-    analyze_btn = st.button(t('btn_analyze'), type="primary", width="stretch")
+    analyze_btn = st.button(t('btn_analyze'), type="primary", use_container_width=True)
 
 # =========================================================
 # 🚀 メインロジック (計算実行)
@@ -214,26 +205,45 @@ if analyze_btn:
             tickers = list(valid_assets.keys())
             hist_returns = engine.fetch_historical_prices(tickers)
 
+            # 💡【修正箇所②】データ期間不足などで弾かれた銘柄のUI通知とウェイト再計算
+            fetched_tickers = list(hist_returns.columns)
+            excluded_tickers = [t for t in tickers if t not in fetched_tickers]
+            
+            if excluded_tickers:
+                st.warning(f"⚠️ **データ期間不足・取得エラーによる除外:** 以下の資産はデータが取得できなかったため分析から除外されました: **{', '.join(excluded_tickers)}**")
+                
+                for t in excluded_tickers:
+                    del valid_assets[t]
+                
+                total_w = sum(v['weight'] for v in valid_assets.values())
+                if total_w <= 0:
+                    st.error("有効な資産が残っていません。分析を中止します。")
+                    st.stop()
+                
+                for k in valid_assets.keys():
+                    valid_assets[k]['weight'] /= total_w
+                
+                st.info("💡 残りの資産でウェイト比率を維持したまま再計算を行いました。")
+
             if hist_returns.empty:
                  st.error(t('msg_err_price_fetch'))
                  st.stop()
 
-            # ベンチマーク取得を先に実行（データ補完ロジックで使用するため）
+            # ベンチマーク取得
             is_jpy_bench = bench_ticker in ['^TPX', '^N225', '1306.T'] or bench_ticker.endswith('.T')
             bench_series = engine.fetch_benchmark_data(bench_ticker, is_jpy_asset=is_jpy_bench)
 
             weights_clean = {k: v['weight'] for k, v in valid_assets.items()}
             
-            # 合成ヒストリー作成時にUIパラメータ（ベンチマークとリバランス頻度）を渡す
+            # 合成ヒストリー作成
             try:
                 port_series, final_weights = PortfolioAnalyzer.create_synthetic_history(
                     hist_returns, weights_clean, benchmark_ret=bench_series, rebalance_freq=rebalance_freq
                 )
             except TypeError:
-                # 念のためのフォールバック (engine側が未更新の場合)
                 port_series, final_weights = PortfolioAnalyzer.create_synthetic_history(hist_returns, weights_clean)
 
-            # 3. ファクター取得
+            # ファクター取得
             french_factors = engine.fetch_french_factors(region_code)
 
             # データ保存
@@ -248,7 +258,7 @@ if analyze_btn:
                 'bench_name': selected_bench_label
             }
             
-            # 再計算時にキャッシュをクリア
+            # キャッシュクリア
             st.session_state.pdf_bytes = None
             st.session_state.analysis_done = False
             st.session_state.figs = {}
@@ -262,13 +272,11 @@ if analyze_btn:
 # =========================================================
 
 if st.session_state.portfolio_data:
-    # データの展開
     data = st.session_state.portfolio_data
     analyzer = PortfolioAnalyzer()
     port_ret = data['returns']
     bench_ret = data['benchmark']
 
-    # 🌍 通貨基準（Numeraire）の設定
     curr_unit = t('currency_jpy') if st.session_state.base_currency == 'JPY' else t('currency_usd')
     init_inv = 1000000 if st.session_state.base_currency == 'JPY' else 10000
 
@@ -290,43 +298,36 @@ if st.session_state.portfolio_data:
     except Exception:
         info_ratio, track_err = np.nan, np.nan
 
-    # ボラティリティが0の場合のゼロ除算エラー対策
-    sharpe_ratio = (cagr - 0.02) / vol if vol > 0 else 0 
+    # ゼロ除算対策
+    sharpe_ratio = (cagr - 0.02) / vol if vol > 0 else 0.0
 
     # --- 2. 高度計算 & 分析レポート ---
     params, r_sq = analyzer.perform_factor_regression(port_ret, data['factors'])
-    if params is not None:
+    if params is not None and not params.empty:
         factor_comment = PortfolioDiagnosticEngine.generate_factor_report(params, lang=st.session_state.lang)
     else:
-        factor_comment = "ファクターデータが不足しており分析できません。"
+        factor_comment = "ファクターデータが不足しているため分析できません。"
 
-    # モンテカルロシミュレーションの実行
     sim_years = 20
     df_stats, final_values = analyzer.run_monte_carlo_simulation(
         port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv
     )
     
-    final_median = np.median(final_values)
-    final_p10 = np.percentile(final_values, 10)
-    final_p90 = np.percentile(final_values, 90)
+    final_median = np.median(final_values) if final_values is not None else 0.0
+    final_p10 = np.percentile(final_values, 10) if final_values is not None else 0.0
+    final_p90 = np.percentile(final_values, 90) if final_values is not None else 0.0
     
-    # 💡 PCA等の高度な計算でのみNaNを落としてエラーを防ぐ（ヒストリカルチャートの期間縮小を防ぐため）
     comp_clean_for_analysis = data['components'].dropna()
     
-    # 相関行列
     corr_matrix = analyzer.calculate_correlation_matrix(comp_clean_for_analysis)
     fig_corr_report = None
     if not corr_matrix.empty:
         fig_corr_report = px.imshow(corr_matrix, text_auto='.2f', aspect="auto", color_continuous_scale='RdBu_r', zmin=-1, zmax=1)
 
-    # AI診断 & PCA
     pca_ratio, _ = analyzer.perform_pca(comp_clean_for_analysis)
     report = PortfolioDiagnosticEngine.generate_report(data['weights'], pca_ratio, port_ret, lang=st.session_state.lang)
 
-    # 詳細レビュー生成
     detailed_review = []
-    
-    # 効率性評価
     if sharpe_ratio > 1.0:
         detailed_review.append(t('review_eff_high').format(sharpe=sharpe_ratio))
     elif sharpe_ratio > 0.6:
@@ -334,7 +335,6 @@ if st.session_state.portfolio_data:
     else:
         detailed_review.append(t('review_eff_low').format(sharpe=sharpe_ratio))
 
-    # ボラティリティ評価
     if vol < 0.12:
         detailed_review.append(t('review_vol_low').format(vol=vol))
     elif vol < 0.18:
@@ -342,37 +342,20 @@ if st.session_state.portfolio_data:
     else:
         detailed_review.append(t('review_vol_high').format(vol=vol))
 
-    # ドローダウン評価
     detailed_review.append(t('review_dd').format(max_dd=max_dd))
-
     detailed_review_str = "\n".join(detailed_review)
 
-    # =========================================================
     # 🛡️ Payload 作成
-    # =========================================================
     st.session_state.payload = {
         'lang': st.session_state.lang,
         'currency': st.session_state.base_currency,
         'curr_unit': curr_unit,
-        'raw_metrics': {
-            'CAGR': cagr,
-            'Vol': vol,
-            'MaxDD': max_dd,
-            'Sharpe': sharpe_ratio
-        },
-        'raw_mc_stats': {
-            'median': final_median,
-            'p10': final_p10,
-            'p90': final_p90,
-            'init_inv': init_inv
-        },
+        'raw_metrics': {'CAGR': cagr, 'Vol': vol, 'MaxDD': max_dd, 'Sharpe': sharpe_ratio},
+        'raw_mc_stats': {'median': final_median, 'p10': final_p10, 'p90': final_p90, 'init_inv': init_inv},
         'date': pd.Timestamp.now().strftime('%Y-%m-%d'),
         'metrics': {
-            'CAGR': f"{cagr:.2%}",
-            'Vol': f"{vol:.2%}",
-            'MaxDD': f"{max_dd:.2%}",
-            'Sharpe': f"{sharpe_ratio:.2f}",
-            'Calmar Ratio': f"{calmar:.2f}",
+            'CAGR': f"{cagr:.2%}", 'Vol': f"{vol:.2%}", 'MaxDD': f"{max_dd:.2%}",
+            'Sharpe': f"{sharpe_ratio:.2f}", 'Calmar Ratio': f"{calmar:.2f}",
             'Information Ratio': f"{info_ratio:.2f}" if not np.isnan(info_ratio) else "N/A"
         },
         'factor_comment': factor_comment,
@@ -386,15 +369,13 @@ if st.session_state.portfolio_data:
         'mc_stats': t('pdf_mc_stats_values').format(median=final_median, p10=final_p10, p90=final_p90, curr=curr_unit)
     }
 
-    # PDF用にグラフを格納する一時辞書
     figs_for_report = {}
     if fig_corr_report:
         figs_for_report['correlation'] = fig_corr_report
 
-    # --- 4. ビジュアライゼーション表示 ---
     st.markdown("---")
-
-    # 💡 修正: metricsが詰まりすぎないようgapを追加
+    
+    # 💡【修正箇所】メトリクス同士の重なりを防ぐ
     c1, c2, c3, c4, c5 = st.columns(5, gap="small")
     c1.metric(t('metric_cagr'), f"{cagr:.2%}")
     c2.metric(t('metric_vol'), f"{vol:.2%}")
@@ -418,7 +399,6 @@ if st.session_state.portfolio_data:
                          'steps': [{'range': [0, 60], 'color': "#333"}, {'range': [60, 100], 'color': "#555"}],
                          'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 85}}
             ))
-            # 💡 修正: width="stretch" を use_container_width=True に変更
             st.plotly_chart(fig_gauge, use_container_width=True)
             
             st.markdown(t('sub_pca_map'))
@@ -444,7 +424,6 @@ if st.session_state.portfolio_data:
             
             st.markdown("---")
             st.subheader(t('sub_ai_diag'))
-            
             st.markdown(f"""
             <div class="report-box">
                 <h3 style="color: #00FFFF; margin-bottom:0px;">{report['type']}</h3>
@@ -464,11 +443,16 @@ if st.session_state.portfolio_data:
             st.plotly_chart(fig_corr_report, use_container_width=True)
 
     with tabs[1]:
+        # 💡【修正箇所①】ファクターデータが無い時の安全なガードレール
         if data['factors'].empty:
-            st.error(t('msg_err_factor'))
+            # 翻訳辞書にキーがない場合も考慮したフォールバックメッセージ
+            err_msg = t('msg_err_factor')
+            if err_msg == 'msg_err_factor': 
+                err_msg = "ファクターデータの取得に失敗したため、このタブの分析はスキップされます。"
+            st.warning(err_msg)
         else:
             st.subheader(t('sub_style'))
-            if params is not None:
+            if params is not None and not params.empty:
                 c1, c2 = st.columns([1, 1], gap="medium")
                 with c1:
                     beta_df = params.drop('const') if 'const' in params else params
@@ -490,6 +474,8 @@ if st.session_state.portfolio_data:
                         <div style="white-space: pre-wrap;">{factor_comment}</div>
                     </div>
                     """, unsafe_allow_html=True)
+            else:
+                st.warning("回帰分析に必要な共通期間のデータが不足しているため、スタイル分析を実行できません。")
             
             st.markdown("---")
             st.subheader(t('sub_rolling'))
@@ -706,7 +692,6 @@ if st.session_state.portfolio_data:
             mc3.metric(t('mc_mean'), f"{final_mean:,.0f}")
             mc4.metric(t('mc_opt'), f"{final_p90:,.0f}")
 
-            # ヒストグラム
             fig_mc_hist = go.Figure()
             counts, _ = np.histogram(final_values, bins=100)
             y_max_freq = counts.max()
@@ -755,7 +740,6 @@ if st.session_state.analysis_done:
 
     col_gen, col_dl = st.columns([1, 1], gap="medium")
 
-    # PDF作成ボタン
     with col_gen:
         if st.button(t('btn_generate_pdf')):
             with st.spinner(t('msg_pdf_spinning')):
@@ -777,7 +761,6 @@ if st.session_state.analysis_done:
                 except Exception as e:
                     st.error(f"{t('msg_pdf_err_gen')}{e}")
 
-    # ダウンロードボタン (生成済みの場合に表示)
     with col_dl:
         if st.session_state.pdf_bytes is not None:
             st.download_button(
