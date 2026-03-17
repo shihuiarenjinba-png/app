@@ -153,6 +153,8 @@ TEXTS = {
     'sub_style': "📊 Style Analysis (Regression)",
     'sub_rolling': "📈 Factor Sensitivity Trajectory (All Periods)",
     'msg_rolling_req': "Rolling analysis requires at least 12 months of data.",
+    # 💡【修正ポイント】不足していたキーを追加
+    'msg_err_factor': "⚠️ Failed to fetch factor data. Style analysis is skipped.",
     'sub_ret_dist': "📊 Return Distribution Histogram",
     'sub_cost_sim': "Return Drag Analysis by Cost (20-Year Simulation)",
     'msg_lost_val': "💸 Value Lost: ▲{loss_amount} {curr_unit}",
