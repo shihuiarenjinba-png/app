@@ -23,7 +23,7 @@ def get_text(key, lang='JA'):
         return en.TEXTS.get(key, key)
 
 # =========================================================
-# 🛠️ Class Definitions (Brain: V18.4 - Fully Modularized i18n)
+# 🛠️ Class Definitions (Brain: V19 - Dynamic Regime & Succession)
 # =========================================================
 
 class MarketDataEngine:
@@ -119,7 +119,7 @@ class MarketDataEngine:
 
     @st.cache_data(ttl=3600*24)
     def fetch_historical_prices(_self, tickers, base_currency='JPY'):
-        """Fetch stock prices. UPDATED: Added multi-currency support."""
+        """Fetch stock prices. UPDATED: Added multi-currency support and Union alignment."""
         try:
             raw_data = yf.download(tickers, start=_self.start_date, end=_self.end_date, interval="1mo", auto_adjust=True, progress=False)
             data = pd.DataFrame()
@@ -170,7 +170,8 @@ class MarketDataEngine:
             else:
                 data_final = data
 
-            returns = data_final.pct_change().dropna(how='all').dropna()
+            # 🔻修正: .dropna() を外し和集合(Union)を維持。データ欠損部はNaNとして残す
+            returns = data_final.pct_change().dropna(how='all')
             
             valid_cols = [c for c in returns.columns if c in tickers]
             if valid_cols:
@@ -222,8 +223,9 @@ class MarketDataEngine:
 
 class PortfolioAnalyzer:
     
+    # 🔻修正: 動的リバランスとNaN補完（自動承継）の実装
     @staticmethod
-    def create_synthetic_history(returns_df, weights_dict):
+    def create_synthetic_history(returns_df, weights_dict, benchmark_ret=None, rebalance_freq='M'):
         valid_tickers = [t for t in weights_dict.keys() if t in returns_df.columns]
         if not valid_tickers:
             return pd.Series(dtype=float), {}
@@ -232,12 +234,48 @@ class PortfolioAnalyzer:
         total_weight = sum(filtered_weights.values())
         norm_weights = {k: v/total_weight for k, v in filtered_weights.items()}
         
-        weighted_returns = pd.DataFrame()
-        for ticker, w in norm_weights.items():
-            weighted_returns[ticker] = returns_df[ticker] * w
+        # 1. NaN補完ロジック (IPO前・上場廃止後の自動承継)
+        filled_returns = returns_df[valid_tickers].copy()
+        if benchmark_ret is not None:
+            for col in filled_returns.columns:
+                filled_returns[col] = filled_returns[col].fillna(benchmark_ret)
+        else:
+            # ベンチマーク未指定時は、その月の残存銘柄の平均値で補完（疑似ベンチマーク）
+            row_mean = filled_returns.mean(axis=1)
+            for col in filled_returns.columns:
+                filled_returns[col] = filled_returns[col].fillna(row_mean).fillna(0)
+                
+        # 2. 動的リバランスの実行
+        port_ret_list = []
+        current_weights = pd.Series(norm_weights)
+        
+        for date, row in filled_returns.iterrows():
+            # 当月のリターン計算
+            ret = (current_weights * row).sum()
+            port_ret_list.append(ret)
             
-        port_ret = weighted_returns.sum(axis=1)
-        return port_ret, norm_weights
+            # ウェイトの自然変動（ドリフト）
+            current_weights = current_weights * (1 + row)
+            if current_weights.sum() > 0:
+                current_weights /= current_weights.sum()
+            else:
+                current_weights = pd.Series(norm_weights) # 全ロス時はリセット
+            
+            # リバランス判定
+            do_rebalance = False
+            if rebalance_freq == 'M':   # 月次リバランス
+                do_rebalance = True
+            elif rebalance_freq == 'Q' and date.month in [3, 6, 9, 12]:  # 四半期リバランス
+                do_rebalance = True
+            elif rebalance_freq == 'Y' and date.month == 12:  # 年次リバランス
+                do_rebalance = True
+                
+            # ウェイトのリセット
+            if do_rebalance:
+                current_weights = pd.Series(norm_weights)
+                
+        port_series = pd.Series(port_ret_list, index=filled_returns.index)
+        return port_series, norm_weights
 
     @staticmethod
     def calculate_correlation_matrix(returns_df):
@@ -272,6 +310,7 @@ class PortfolioAnalyzer:
         except:
             return None, None
 
+    # 🔻修正: レジームスイッチングと t分布による動的ボラティリティ・ドラッグの実装
     @staticmethod
     def run_monte_carlo_simulation(port_ret, n_years=20, n_simulations=7500, initial_investment=1000000):
         if port_ret.empty:
@@ -281,16 +320,45 @@ class PortfolioAnalyzer:
         sigma_monthly = port_ret.std()
         
         n_months = n_years * 12
-        drift = (mu_monthly - 0.5 * sigma_monthly**2)
         
-        df_t = 6
-        Z = np.random.standard_t(df_t, (n_months, n_simulations))
-        
-        daily_returns = np.exp(drift + sigma_monthly * Z)
+        # t分布の自由度（ファットテール・極端な変動の強調）
+        df_t = 5 
         
         price_paths = np.zeros((n_months + 1, n_simulations))
         price_paths[0] = initial_investment
-        price_paths[1:] = initial_investment * np.cumprod(daily_returns, axis=0)
+        
+        # 初期レジーム設定 (0: 平時/上昇相場, 1: 有事/パニック相場)
+        current_regime = np.zeros(n_simulations, dtype=int)
+        
+        # 状態遷移確率（マルコフ連鎖）
+        p_00 = 0.95 # 平時が継続する確率 (95%)
+        p_11 = 0.80 # 有事が継続する確率 (80%)
+
+        for m in range(1, n_months + 1):
+            # 確率に基づくレジームの遷移
+            rand_trans = np.random.rand(n_simulations)
+            to_crisis = (current_regime == 0) & (rand_trans > p_00)
+            to_normal = (current_regime == 1) & (rand_trans > p_11)
+            
+            current_regime[to_crisis] = 1
+            current_regime[to_normal] = 0
+            
+            # 各レジームにおける 今月の期待リターンとボラティリティ
+            # 有事(1)の場合、リターンは下落し、ボラティリティは2倍に跳ね上がる
+            current_mu = np.where(current_regime == 0, mu_monthly, mu_monthly - sigma_monthly)
+            current_sigma = np.where(current_regime == 0, sigma_monthly, sigma_monthly * 2.0)
+            
+            # 正規分布ではなく、t分布からのランダムサンプリング
+            Z = np.random.standard_t(df_t, n_simulations)
+            
+            # ボラティリティ・ドラッグの動的適用 (G ≈ A - 1/2 * σ^2)
+            # 変動率が大きい有事には、幾何平均リターンが大幅に削られる
+            drift = current_mu - 0.5 * (current_sigma ** 2)
+            
+            monthly_returns = np.exp(drift + current_sigma * Z)
+            
+            # 資産額の更新
+            price_paths[m] = price_paths[m-1] * monthly_returns
         
         last_date = port_ret.index[-1]
         future_dates = pd.date_range(start=last_date, periods=n_months + 1, freq='M')
@@ -499,7 +567,6 @@ class PortfolioAnalyzer:
         return final_offsets
 
 class PortfolioDiagnosticEngine:
-    # 🔻修正: ハードコードされたテキストを get_text() による辞書参照に変更
     @staticmethod
     def generate_report(weights_dict, pca_ratio, port_ret, benchmark_ret=None, lang='ja'):
         report = {
@@ -540,9 +607,6 @@ class PortfolioDiagnosticEngine:
         if port_ret.empty: 
             return get_text('no_data', lang)
             
-        # (※ 歪度・尖度の詳しい説明文が必要な場合は、辞書に追加して呼び出します。
-        # 今回は一旦、既存の動きを維持しつつ、PDFなど主要なものに影響しないため
-        # 英語か日本語かで簡易的に切り替える元のロジックを保持しています)
         skew = port_ret.skew()
         kurt = port_ret.kurt()
         desc = []
