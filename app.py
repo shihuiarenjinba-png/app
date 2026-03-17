@@ -199,7 +199,8 @@ if analyze_btn:
                 try:
                     k, v = item.split(':')
                     parsed_dict[k.strip()] = float(v.strip())
-                except: pass
+                except ValueError: 
+                    pass # フォーマットが不正な場合はスキップ
 
             if not parsed_dict: st.stop()
 
@@ -218,7 +219,7 @@ if analyze_btn:
                  st.stop()
 
             # ベンチマーク取得を先に実行（データ補完ロジックで使用するため）
-            is_jpy_bench = True if bench_ticker in ['^TPX', '^N225', '1306.T'] or bench_ticker.endswith('.T') else False
+            is_jpy_bench = bench_ticker in ['^TPX', '^N225', '1306.T'] or bench_ticker.endswith('.T')
             bench_series = engine.fetch_benchmark_data(bench_ticker, is_jpy_asset=is_jpy_bench)
 
             weights_clean = {k: v['weight'] for k, v in valid_assets.items()}
@@ -281,15 +282,16 @@ if st.session_state.portfolio_data:
     
     try:
         omega = analyzer.calculate_omega_ratio(port_ret, threshold=0.0)
-    except:
+    except Exception:
         omega = 0.0
         
     try:
         info_ratio, track_err = analyzer.calculate_information_ratio(port_ret, bench_ret)
-    except:
+    except Exception:
         info_ratio, track_err = np.nan, np.nan
 
-    sharpe_ratio = (cagr - 0.02) / vol # Simplified Sharpe
+    # ボラティリティが0の場合のゼロ除算エラー対策
+    sharpe_ratio = (cagr - 0.02) / vol if vol > 0 else 0 
 
     # --- 2. 高度計算 & 分析レポート ---
     params, r_sq = analyzer.perform_factor_regression(port_ret, data['factors'])
@@ -345,7 +347,8 @@ if st.session_state.portfolio_data:
 
     detailed_review_str = "\n".join(detailed_review)
 
- # 🛡️ Payload 作成
+    # =========================================================
+    # 🛡️ Payload 作成
     # =========================================================
     st.session_state.payload = {
         'lang': st.session_state.lang,
