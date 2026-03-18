@@ -7,6 +7,9 @@ from statsmodels.regression.rolling import RollingOLS
 from sklearn.decomposition import PCA
 import pandas_datareader.data as web
 from datetime import datetime
+import requests
+import zipfile
+import io
 
 # 🔻追加: 多言語辞書モジュールの読み込み
 try:
@@ -41,15 +44,14 @@ class MarketDataEngine:
         
         for ticker, weight in input_dict.items():
             try:
-                # Check via yfinance
-                tick = yf.Ticker(ticker)
-                hist = tick.history(period="5d")
-                if not hist.empty:
+                # 💡【修正箇所①】日本株で404エラーを誤発火する .history() をやめ、確実な yf.download() に変更
+                test_data = yf.download(ticker, period="1mo", progress=False)
+                if not test_data.empty:
                     valid_data[ticker] = {'name': ticker, 'weight': weight}
                     status_text.text(f"✅ OK: {ticker}")
                 else:
                     invalid_tickers.append(ticker)
-            except:
+            except Exception:
                 invalid_tickers.append(ticker)
         
         status_text.empty()
@@ -86,37 +88,52 @@ class MarketDataEngine:
     @st.cache_data(ttl=3600*24*7)
     def fetch_french_factors(_self, region='US'):
         """Fetch Fama-French 5 Factors."""
-        # 💡【修正箇所①】ファクターデータ取得の堅牢化 (例外処理の強化とfreq='ME'の徹底)
-        try:
-            name = 'F-F_Research_Data_5_Factors_2x3'
-            if region == 'Japan': 
-                name = 'Japan_5_Factors' 
-            elif region == 'Global': 
-                name = 'Global_5_Factors'
+        name = 'F-F_Research_Data_5_Factors_2x3'
+        if region == 'Japan': 
+            name = 'Japan_5_Factors' 
+        elif region == 'Global': 
+            name = 'Global_5_Factors'
 
-            # Attempt to fetch data
+        try:
+            # まずは標準の pandas_datareader を試行
             ff_data = web.DataReader(name, 'famafrench', start=_self.start_date, end=_self.end_date)[0]
-            
-            # Process data if successful
             ff_data = ff_data / 100.0
             ff_data.index = ff_data.index.to_timestamp(freq='ME')
             
             if ff_data.index.tz is not None: 
                 ff_data.index = ff_data.index.tz_localize(None)
-            
             return ff_data
+
         except Exception:
-            # Fallback to 3 factors if 5 is not available (e.g. some regions)
+            # 💡【修正箇所②】APIがブロックされた場合、ブラウザを偽装してZIPを直接ダウンロードする迂回ルート
             try:
-                name = 'F-F_Research_Data_Factors'
-                if region == 'Japan': name = 'Japan_3_Factors'
-                elif region == 'Global': name = 'Global_3_Factors'
-                ff_data = web.DataReader(name, 'famafrench', start=_self.start_date, end=_self.end_date)[0]
-                ff_data = ff_data / 100.0
-                ff_data.index = ff_data.index.to_timestamp(freq='ME')
-                if ff_data.index.tz is not None: ff_data.index = ff_data.index.tz_localize(None)
+                url = f"https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/{name}_CSV.zip"
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+                response = requests.get(url, headers=headers, timeout=15)
+                response.raise_for_status()
+                
+                with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                    csv_filename = z.namelist()[0]
+                    with z.open(csv_filename) as f:
+                        # Fama-FrenchのCSVは冒頭3行がメタデータなのでスキップ
+                        df = pd.read_csv(f, skiprows=3, index_col=0)
+                
+                # インデックスを日時に変換 (例: "202001" -> 2020-01-01)
+                df.index = pd.to_datetime(df.index.astype(str), format='%Y%m', errors='coerce')
+                df = df.dropna()
+                
+                # 指定期間でフィルタリングし、パーセントを小数に変換
+                ff_data = df.loc[_self.start_date:_self.end_date] / 100.0
+                ff_data.index = ff_data.index.to_period('M').to_timestamp(freq='ME')
+                
+                if ff_data.index.tz is not None: 
+                    ff_data.index = ff_data.index.tz_localize(None)
+                    
                 return ff_data
-            except Exception:
+            except Exception as e:
+                print(f"Factor Data Fetch Error (Fallback): {e}")
                 return pd.DataFrame()
 
     @st.cache_data(ttl=3600*24)
@@ -281,15 +298,12 @@ class PortfolioAnalyzer:
         if port_ret.empty or factor_df is None or factor_df.empty:
             return None, None
 
-        # 💡【修正箇所②】回帰分析時のデータ期間の厳密な同期
         df_y = port_ret.to_frame(name='y')
         df_x = factor_df.copy()
         
-        # 月次レベルで正確に一致させるため、indexをPeriod(月)に変換
         df_y.index = df_y.index.to_period('M') 
         df_x.index = df_x.index.to_period('M') 
         
-        # 共通の期間を抽出して結合
         common_idx = df_y.index.intersection(df_x.index)
         if common_idx.empty:
             return None, None
@@ -371,7 +385,6 @@ class PortfolioAnalyzer:
         p_df = port_ret.to_frame(name='p')
         b_df = bench_ret.to_frame(name='b')
         
-        # 💡【修正箇所②】共通期間の厳密な同期
         p_df.index = p_df.index.to_period('M')
         b_df.index = b_df.index.to_period('M')
         
@@ -383,8 +396,6 @@ class PortfolioAnalyzer:
         if len(merged) < 12: 
             return np.nan, np.nan
         
-        # 💡【修正箇所③】幾何平均（複利）ベースの計算への統一
-        # ポートフォリオとベンチマークの累積リターンから現実のCAGRを算出
         cum_p = (1 + merged['p']).cumprod()
         cum_b = (1 + merged['b']).cumprod()
         
@@ -394,7 +405,6 @@ class PortfolioAnalyzer:
         
         annualized_active_return = cagr_p - cagr_b
         
-        # トラッキングエラー（リスク）は差分の標準偏差から算出
         active_ret = merged['p'] - merged['b']
         tracking_error = active_ret.std() * np.sqrt(12)
         
@@ -422,7 +432,6 @@ class PortfolioAnalyzer:
         if factor_df is None or factor_df.empty or port_ret.empty:
             return pd.DataFrame()
 
-        # 💡【修正箇所②】回帰分析時のデータ期間の厳密な同期
         df_y = port_ret.to_frame(name='y')
         df_x = factor_df.copy()
         
@@ -454,7 +463,6 @@ class PortfolioAnalyzer:
             if 'const' in params.columns:
                 params = params.drop(columns=['const'])
             
-            # Plotly描画時にエラーが出ないよう、Timestamp型に戻す
             params.index = params.index.to_timestamp()
             return params.dropna()
         except:
@@ -624,7 +632,6 @@ class PortfolioDiagnosticEngine:
 
     @staticmethod
     def generate_factor_report(params, lang='ja'):
-        """Translate Factor Analysis using i18n dictionary."""
         if params is None: 
             return get_text('no_data', lang)
         
@@ -636,25 +643,20 @@ class PortfolioDiagnosticEngine:
         rmw = params.get('RMW', 0)
         cma = params.get('CMA', 0)
         
-        # 1. HML
         if hml > 0.15: comments.append(get_text('factor_hml_val', lang))
         elif hml < -0.15: comments.append(get_text('factor_hml_gro', lang))
         else: comments.append(get_text('factor_hml_neu', lang))
         
-        # 2. SMB
         if smb > 0.15: comments.append(get_text('factor_smb_sma', lang))
         elif smb < -0.15: comments.append(get_text('factor_smb_lar', lang))
         
-        # 3. Mkt-RF
         if mkt > 1.1: comments.append(get_text('factor_mkt_high', lang))
         elif mkt < 0.9: comments.append(get_text('factor_mkt_low', lang))
         
-        # 4. RMW
         if 'RMW' in params.index:
             if rmw > 0.15: comments.append(get_text('factor_rmw_high', lang))
             elif rmw < -0.15: comments.append(get_text('factor_rmw_low', lang))
             
-        # 5. CMA
         if 'CMA' in params.index:
             if cma > 0.15: comments.append(get_text('factor_cma_high', lang))
             elif cma < -0.15: comments.append(get_text('factor_cma_low', lang))
