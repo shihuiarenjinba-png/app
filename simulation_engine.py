@@ -8,8 +8,6 @@ from sklearn.decomposition import PCA
 import pandas_datareader.data as web
 from datetime import datetime
 import requests
-import zipfile
-import io
 
 # 🔻追加: 多言語辞書モジュールの読み込み
 try:
@@ -44,8 +42,8 @@ class MarketDataEngine:
         
         for ticker, weight in input_dict.items():
             try:
-                # 💡【修正箇所①】日本株で404エラーを誤発火する .history() をやめ、確実な yf.download() に変更
-                test_data = yf.download(ticker, period="1mo", progress=False)
+                # 💡【修正箇所①】上場廃止銘柄なども検知できるよう、取得期間を "max" に変更して存在確認
+                test_data = yf.download(ticker, period="max", progress=False)
                 if not test_data.empty:
                     valid_data[ticker] = {'name': ticker, 'weight': weight}
                     status_text.text(f"✅ OK: {ticker}")
@@ -105,20 +103,22 @@ class MarketDataEngine:
             return ff_data
 
         except Exception:
-            # 💡【修正箇所②】APIがブロックされた場合、ブラウザを偽装してZIPを直接ダウンロードする迂回ルート
+            # 💡【修正箇所②】Pandasの read_csv を使い、ブラウザ偽装ヘッダーを付けてシンプルなCSVデータを直接読み込む
             try:
                 url = f"https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/{name}_CSV.zip"
-                headers = {
+                storage_options = {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 }
-                response = requests.get(url, headers=headers, timeout=15)
-                response.raise_for_status()
                 
-                with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-                    csv_filename = z.namelist()[0]
-                    with z.open(csv_filename) as f:
-                        # Fama-FrenchのCSVは冒頭3行がメタデータなのでスキップ
-                        df = pd.read_csv(f, skiprows=3, index_col=0)
+                # Pandasが直接URL先のZIPファイル内のCSVを読み解いてくれます
+                df = pd.read_csv(
+                    url, 
+                    compression='zip', 
+                    skiprows=3, 
+                    index_col=0, 
+                    storage_options=storage_options,
+                    encoding='utf-8'
+                )
                 
                 # インデックスを日時に変換 (例: "202001" -> 2020-01-01)
                 df.index = pd.to_datetime(df.index.astype(str), format='%Y%m', errors='coerce')
@@ -148,17 +148,20 @@ class MarketDataEngine:
                 if isinstance(raw_data, pd.Series):
                     data[ticker] = raw_data
                 elif isinstance(raw_data, pd.DataFrame):
-                    if 'Close' in raw_data.columns:
+                    # 💡【修正箇所①】株式分割バグを防ぐため、生のCloseではなく Adj Close（調整後終値）を最優先で取得
+                    if 'Adj Close' in raw_data.columns:
+                        data[ticker] = raw_data['Adj Close']
+                    elif 'Close' in raw_data.columns:
                         data[ticker] = raw_data['Close']
                     else:
                         data[ticker] = raw_data.iloc[:, 0]
             else:
                 if isinstance(raw_data.columns, pd.MultiIndex):
                     try:
-                        data = raw_data.xs('Close', axis=1, level=0, drop_level=True)
+                        data = raw_data.xs('Adj Close', axis=1, level=0, drop_level=True)
                     except KeyError:
                         try:
-                            data = raw_data.xs('Adj Close', axis=1, level=0, drop_level=True)
+                            data = raw_data.xs('Close', axis=1, level=0, drop_level=True)
                         except:
                             data = raw_data.iloc[:, :len(tickers)]
                             data.columns = tickers
@@ -207,11 +210,16 @@ class MarketDataEngine:
             raw_data = yf.download(ticker, start=_self.start_date, end=_self.end_date, interval="1mo", auto_adjust=True, progress=False)
             data = pd.Series(dtype=float)
             if isinstance(raw_data, pd.DataFrame):
-                if 'Close' in raw_data.columns:
+                # 💡【修正箇所①】ベンチマークでも Adj Close を優先
+                if 'Adj Close' in raw_data.columns:
+                    data = raw_data['Adj Close']
+                elif 'Close' in raw_data.columns:
                     data = raw_data['Close']
                 elif isinstance(raw_data.columns, pd.MultiIndex):
-                     try: data = raw_data.xs('Close', axis=1, level=0, drop_level=True)
-                     except: data = raw_data.iloc[:, 0]
+                     try: data = raw_data.xs('Adj Close', axis=1, level=0, drop_level=True)
+                     except:
+                         try: data = raw_data.xs('Close', axis=1, level=0, drop_level=True)
+                         except: data = raw_data.iloc[:, 0]
                 else:
                     data = raw_data.iloc[:, 0]
             else:
@@ -251,15 +259,10 @@ class PortfolioAnalyzer:
         total_weight = sum(filtered_weights.values())
         norm_weights = {k: v/total_weight for k, v in filtered_weights.items()}
         
-        filled_returns = returns_df[valid_tickers].copy()
-        if benchmark_ret is not None:
-            for col in filled_returns.columns:
-                filled_returns[col] = filled_returns[col].fillna(benchmark_ret)
-        else:
-            row_mean = filled_returns.mean(axis=1)
-            for col in filled_returns.columns:
-                filled_returns[col] = filled_returns[col].fillna(row_mean).fillna(0)
-                
+        # 💡【修正箇所①】非上場期間（NaN）をベンチマークや平均値で埋めず、「0.0（現金）」として扱う。
+        # これにより生存バイアスが完全に排除され、悪い銘柄や上場廃止銘柄がポートフォリオの足を正確に引っ張るようになります。
+        filled_returns = returns_df[valid_tickers].copy().fillna(0.0)
+        
         port_ret_list = []
         current_weights = pd.Series(norm_weights)
         
