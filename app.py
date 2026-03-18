@@ -140,7 +140,6 @@ with st.sidebar:
     target_region = st.selectbox(t('sb_region'), ["US (米国)", "Japan (日本)", "Global (全世界)"], index=0)
     region_code = target_region.split()[0]
     
-    # 💡【修正箇所】デフォルトベンチマークをSPY（配当込み）に変更
     bench_options = {
         'US': {'S&P 500 (SPY)': 'SPY', 'NASDAQ 100 (^NDX)': '^NDX'},
         'Japan': {'TOPIX (1306 ETF)': '1306.T', '日経平均 (^N225)': '^N225'},
@@ -174,6 +173,7 @@ with st.sidebar:
     advisor_note = st.text_area(t('sb_adv_label'), value=default_note, height=100)
 
     st.markdown("---")
+    # Streamlit最新仕様に合わせて use_container_width=True を維持（ボタンの場合は許容されます）
     analyze_btn = st.button(t('btn_analyze'), type="primary", use_container_width=True)
 
 # =========================================================
@@ -205,7 +205,7 @@ if analyze_btn:
             tickers = list(valid_assets.keys())
             hist_returns = engine.fetch_historical_prices(tickers)
 
-            # 💡【修正箇所②】データ期間不足などで弾かれた銘柄のUI通知とウェイト再計算
+            # 💡 除外銘柄のUIへの通知（クリーンアップ済み）
             fetched_tickers = list(hist_returns.columns)
             excluded_tickers = [t for t in tickers if t not in fetched_tickers]
             
@@ -375,7 +375,7 @@ if st.session_state.portfolio_data:
 
     st.markdown("---")
     
-    # 💡【修正箇所】メトリクス同士の重なりを防ぐ
+    # 💡 メトリクス同士の重なりを防ぐ
     c1, c2, c3, c4, c5 = st.columns(5, gap="small")
     c1.metric(t('metric_cagr'), f"{cagr:.2%}")
     c2.metric(t('metric_vol'), f"{vol:.2%}")
@@ -399,7 +399,8 @@ if st.session_state.portfolio_data:
                          'steps': [{'range': [0, 60], 'color': "#333"}, {'range': [60, 100], 'color': "#555"}],
                          'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 85}}
             ))
-            st.plotly_chart(fig_gauge, use_container_width=True)
+            # 💡 修正箇所：use_container_width=True を width="stretch" に変更（以下すべて同様）
+            st.plotly_chart(fig_gauge, width="stretch")
             
             st.markdown(t('sub_pca_map'))
             try:
@@ -412,14 +413,14 @@ if st.session_state.portfolio_data:
                                          color=labels, title=t('graph_pca'))
                     fig_pca.update_traces(textposition='top center', marker=dict(size=12))
                     fig_pca.update_layout(xaxis_title=t('pca_pc1'), yaxis_title=t('pca_pc2'), showlegend=False)
-                    st.plotly_chart(fig_pca, use_container_width=True)
+                    st.plotly_chart(fig_pca, width="stretch")
             except Exception as e:
                 st.warning(f"{t('msg_err_pca')}{e}")
 
         with c2:
             st.subheader(t('graph_alloc'))
             fig_pie = px.pie(values=list(data['weights'].values()), names=list(data['weights'].keys()), hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width="stretch")
             figs_for_report['allocation'] = fig_pie
             
             st.markdown("---")
@@ -440,12 +441,11 @@ if st.session_state.portfolio_data:
             num_assets = len(data['components'].columns)
             corr_height = max(400, 200 + (num_assets * 30))
             fig_corr_report.update_layout(height=corr_height)
-            st.plotly_chart(fig_corr_report, use_container_width=True)
+            st.plotly_chart(fig_corr_report, width="stretch")
 
     with tabs[1]:
-        # 💡【修正箇所①】ファクターデータが無い時の安全なガードレール
+        # 💡 ファクターデータが無い時の安全なガードレール
         if data['factors'].empty:
-            # 翻訳辞書にキーがない場合も考慮したフォールバックメッセージ
             err_msg = t('msg_err_factor')
             if err_msg == 'msg_err_factor': 
                 err_msg = "ファクターデータの取得に失敗したため、このタブの分析はスキップされます。"
@@ -462,7 +462,7 @@ if st.session_state.portfolio_data:
                         marker_color=colors, text=[f"{x:.2f}" for x in beta_df.values], textposition='auto'
                     ))
                     fig_beta.update_layout(title=t('graph_beta'), xaxis_title="感応度", height=300)
-                    st.plotly_chart(fig_beta, use_container_width=True)
+                    st.plotly_chart(fig_beta, width="stretch")
                     st.caption(f"決定係数 (R²): {r_sq:.2%} (モデル説明力)")
                     figs_for_report['factors'] = fig_beta
                 
@@ -500,7 +500,7 @@ if st.session_state.portfolio_data:
                         fig_roll.add_trace(go.Scatter(x=rolling_betas.index, y=rolling_betas[c], name=c))
 
                 fig_roll.update_layout(title=t('graph_roll'), yaxis_title="Beta", height=400)
-                st.plotly_chart(fig_roll, use_container_width=True)
+                st.plotly_chart(fig_roll, width="stretch")
             else:
                 st.info(t('msg_rolling_req'))
 
@@ -515,6 +515,7 @@ if st.session_state.portfolio_data:
             port_ret_sync = port_ret
             bench_ret_sync = pd.Series(dtype=float)
 
+        # 💡 ここのスケール計算（* 10000）は現状で大正解です。そのまま活かします。
         cum_ret_sync = (1 + port_ret_sync).cumprod() * 10000
         
         fig_hist = go.Figure()
@@ -538,14 +539,14 @@ if st.session_state.portfolio_data:
             line=dict(color=COLORS['main'], width=2.5)
         ))
         
-        st.plotly_chart(fig_hist, use_container_width=True)
+        st.plotly_chart(fig_hist, width="stretch")
         figs_for_report['cumulative'] = fig_hist
 
         fig_dd = go.Figure()
         dd_series = (cum_ret_sync / cum_ret_sync.cummax() - 1)
         fig_dd.add_trace(go.Scatter(x=dd_series.index, y=dd_series, fill='tozeroy', name='Drawdown', line=dict(color='red')))
         fig_dd.update_layout(title=t('graph_dd'))
-        st.plotly_chart(fig_dd, use_container_width=True)
+        st.plotly_chart(fig_dd, width="stretch")
         figs_for_report['drawdown'] = fig_dd
 
         st.markdown("---")
@@ -568,7 +569,7 @@ if st.session_state.portfolio_data:
             fig_dist.add_trace(go.Scatter(x=x_range, y=y_norm, mode='lines', name=t('leg_norm_dist'), line=dict(color='white', dash='dash', width=2)))
         
         fig_dist.update_layout(title=t('graph_dist'), xaxis_title=t('dist_ret'), yaxis_title=t('dist_density'), height=400)
-        st.plotly_chart(fig_dist, use_container_width=True)
+        st.plotly_chart(fig_dist, width="stretch")
 
     with tabs[3]:
         st.subheader(t('sub_cost_sim'))
@@ -603,7 +604,7 @@ if st.session_state.portfolio_data:
             ))
             
             fig_cost.update_layout(title=t('graph_cost'), xaxis_title=t('label_months'), yaxis_title=t('label_multiple'))
-            st.plotly_chart(fig_cost, use_container_width=True)
+            st.plotly_chart(fig_cost, width="stretch")
             
         with c2:
             st.error(t('msg_lost_val').format(loss_amount=f"{loss_amount:,.0f}", curr_unit=curr_unit))
@@ -650,7 +651,7 @@ if st.session_state.portfolio_data:
                 yaxis={'categoryorder':'total ascending'},
                 height=dynamic_height
             )
-            st.plotly_chart(fig_rel, use_container_width=True)
+            st.plotly_chart(fig_rel, width="stretch")
             
             st.markdown(t('sub_attr_abs'))
             st.caption(t('cap_attr_abs'))
@@ -667,7 +668,7 @@ if st.session_state.portfolio_data:
                 yaxis={'categoryorder':'total ascending'},
                 height=dynamic_height
             )
-            st.plotly_chart(fig_abs, use_container_width=True)
+            st.plotly_chart(fig_abs, width="stretch")
 
             figs_for_report['attribution'] = fig_rel
 
@@ -680,7 +681,7 @@ if st.session_state.portfolio_data:
             fig_mc.add_trace(go.Scatter(x=df_stats.index, y=df_stats['p90'], mode='lines', name=t('leg_mc_p90'), line=dict(color=COLORS['p90'], width=1, dash='dot')))
             
             fig_mc.update_layout(title=f"{t('graph_mc')} ({t('label_principal')}: {init_inv:,} {curr_unit})", yaxis_title=f"{t('label_val')} ({curr_unit})", height=500)
-            st.plotly_chart(fig_mc, use_container_width=True)
+            st.plotly_chart(fig_mc, width="stretch")
             figs_for_report['monte_carlo'] = fig_mc
 
             st.markdown(t('sub_mc_dist'))
@@ -721,7 +722,7 @@ if st.session_state.portfolio_data:
                 xaxis=dict(range=[0, x_max_view]), 
                 yaxis=dict(range=[0, y_max_freq * 1.4])
             )
-            st.plotly_chart(fig_mc_hist, use_container_width=True)
+            st.plotly_chart(fig_mc_hist, width="stretch")
             
             st.success(t('msg_sim_complete'))
 
@@ -745,7 +746,8 @@ if st.session_state.analysis_done:
             with st.spinner(t('msg_pdf_spinning')):
                 try:
                     final_payload = st.session_state.payload.copy()
-                    final_payload['advisor_note'] = advisor_note
+                    # ※もし前半コードで advisor_note を定義していない場合は適宜空文字にしてください
+                    final_payload['advisor_note'] = advisor_note if 'advisor_note' in locals() else ""
                     
                     if final_payload and st.session_state.figs:
                         pdf_buffer = create_pdf_report(final_payload, st.session_state.figs)
