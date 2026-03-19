@@ -42,7 +42,7 @@ class MarketDataEngine:
         
         for ticker, weight in input_dict.items():
             try:
-                # 💡【修正箇所①】上場廃止銘柄なども検知できるよう、取得期間を "max" に変更して存在確認
+                # 💡上場廃止銘柄なども検知できるよう、取得期間を "max" に変更して存在確認
                 test_data = yf.download(ticker, period="max", progress=False)
                 if not test_data.empty:
                     valid_data[ticker] = {'name': ticker, 'weight': weight}
@@ -93,24 +93,46 @@ class MarketDataEngine:
             name = 'Global_5_Factors'
 
         try:
-            # まずは標準の pandas_datareader を試行
-            ff_data = web.DataReader(name, 'famafrench', start=_self.start_date, end=_self.end_date)[0]
-            ff_data = ff_data / 100.0
-            ff_data.index = ff_data.index.to_timestamp(freq='ME')
+            # 1. データ抽出フィルター
+            ff_dict = web.DataReader(name, 'famafrench', start=_self.start_date, end=_self.end_date)
+            if not ff_dict: 
+                print(f"Warning: Empty dictionary returned for dataset {name}")
+                return pd.DataFrame()
             
+            ff_data = ff_dict[0]
+
+            # 2. カラム整形フィルター
+            ff_data.columns = [str(c).strip() for c in ff_data.columns]
+            
+            if ff_data.max().max() > 0.5:
+                ff_data = ff_data / 100.0
+
+            # 3. 日付インデックス矯正フィルター（最重要）
+            if isinstance(ff_data.index, pd.PeriodIndex):
+                ff_data.index = ff_data.index.to_timestamp()
+            else:
+                ff_data.index = pd.to_datetime(ff_data.index)
+            
+            ff_data.index = pd.to_datetime(ff_data.index).normalize()
             if ff_data.index.tz is not None: 
                 ff_data.index = ff_data.index.tz_localize(None)
-            return ff_data
 
+            # 無リスク金利（RF）の保証（万が一無い場合）
+            if not any('RF' in c.upper() for c in ff_data.columns):
+                ff_data['RF'] = 0.0
+
+            # 4. 欠損値補間フィルター
+            return ff_data.interpolate(method='linear').ffill().bfill()
+            
         except Exception:
-            # 💡【修正箇所②】Pandasの read_csv を使い、ブラウザ偽装ヘッダーを付けてシンプルなCSVデータを直接読み込む
+            # Pandasの read_csv を使い、ブラウザ偽装ヘッダーを付けてシンプルなCSVデータを直接読み込む
             try:
                 url = f"https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/{name}_CSV.zip"
                 storage_options = {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 }
                 
-                # Pandasが直接URL先のZIPファイル内のCSVを読み解いてくれます
+                # Pandasが直接URL先のZIPファイル内のCSVを読み解く
                 df = pd.read_csv(
                     url, 
                     compression='zip', 
@@ -148,7 +170,7 @@ class MarketDataEngine:
                 if isinstance(raw_data, pd.Series):
                     data[ticker] = raw_data
                 elif isinstance(raw_data, pd.DataFrame):
-                    # 💡【修正箇所①】株式分割バグを防ぐため、生のCloseではなく Adj Close（調整後終値）を最優先で取得
+                    # 株式分割バグを防ぐため、生のCloseではなく Adj Close（調整後終値）を最優先で取得
                     if 'Adj Close' in raw_data.columns:
                         data[ticker] = raw_data['Adj Close']
                     elif 'Close' in raw_data.columns:
@@ -210,7 +232,6 @@ class MarketDataEngine:
             raw_data = yf.download(ticker, start=_self.start_date, end=_self.end_date, interval="1mo", auto_adjust=True, progress=False)
             data = pd.Series(dtype=float)
             if isinstance(raw_data, pd.DataFrame):
-                # 💡【修正箇所①】ベンチマークでも Adj Close を優先
                 if 'Adj Close' in raw_data.columns:
                     data = raw_data['Adj Close']
                 elif 'Close' in raw_data.columns:
@@ -259,8 +280,7 @@ class PortfolioAnalyzer:
         total_weight = sum(filtered_weights.values())
         norm_weights = {k: v/total_weight for k, v in filtered_weights.items()}
         
-        # 💡【修正箇所①】非上場期間（NaN）をベンチマークや平均値で埋めず、「0.0（現金）」として扱う。
-        # これにより生存バイアスが完全に排除され、悪い銘柄や上場廃止銘柄がポートフォリオの足を正確に引っ張るようになります。
+        # 非上場期間（NaN）をベンチマークや平均値で埋めず、「0.0（現金）」として扱う
         filled_returns = returns_df[valid_tickers].copy().fillna(0.0)
         
         port_ret_list = []
@@ -304,9 +324,7 @@ class PortfolioAnalyzer:
         df_y = port_ret.to_frame(name='y')
         df_x = factor_df.copy()
         
-        df_y.index = df_y.index.to_period('M') 
-        df_x.index = df_x.index.to_period('M') 
-        
+        # 💡【修正箇所】両方のデータがすでにきれいなDatetimeIndexで揃っているため、to_period変換を削除してそのまま結合
         common_idx = df_y.index.intersection(df_x.index)
         if common_idx.empty:
             return None, None
@@ -438,9 +456,7 @@ class PortfolioAnalyzer:
         df_y = port_ret.to_frame(name='y')
         df_x = factor_df.copy()
         
-        df_y.index = df_y.index.to_period('M') 
-        df_x.index = df_x.index.to_period('M') 
-        
+        # 💡【修正箇所】to_period変換を完全に削除してそのまま結合
         common_idx = df_y.index.intersection(df_x.index)
         if common_idx.empty: 
             return pd.DataFrame()
@@ -466,7 +482,7 @@ class PortfolioAnalyzer:
             if 'const' in params.columns:
                 params = params.drop(columns=['const'])
             
-            params.index = params.index.to_timestamp()
+            # 💡【修正箇所】最初からDatetimeIndexのため、to_timestamp()で戻す処理を削除
             return params.dropna()
         except:
             return pd.DataFrame()
