@@ -33,6 +33,28 @@ class MarketDataEngine:
         self.start_date = "2000-01-01"
         self.end_date = datetime.today().strftime('%Y-%m-%d')
         self.usdjpy_cache = None
+        self.us_sector_proxies = {
+            'technology': 'XLK',
+            'communication services': 'XLC',
+            'consumer cyclical': 'XLY',
+            'consumer defensive': 'XLP',
+            'financial services': 'XLF',
+            'healthcare': 'XLV',
+            'industrials': 'XLI',
+            'energy': 'XLE',
+            'basic materials': 'XLB',
+            'utilities': 'XLU',
+            'real estate': 'XLRE',
+        }
+        self.industry_keyword_proxies = {
+            'semiconductor': 'SOXX',
+            'chip': 'SOXX',
+            'software': 'IGV',
+            'internet': 'XLC',
+            'biotech': 'XBI',
+            'bank': 'KBE',
+            'insurance': 'KIE',
+        }
 
     def validate_tickers(self, input_dict):
         """Check if tickers exist."""
@@ -205,6 +227,101 @@ class MarketDataEngine:
         except:
             return pd.Series(dtype=float)
 
+    @st.cache_data(ttl=3600*24*7)
+    def get_ticker_profile(_self, ticker):
+        profile = {
+            'ticker': ticker,
+            'quoteType': None,
+            'sector': None,
+            'industry': None,
+            'longName': None,
+        }
+        try:
+            info = yf.Ticker(ticker).info or {}
+            profile['quoteType'] = info.get('quoteType')
+            profile['sector'] = info.get('sector')
+            profile['industry'] = info.get('industry')
+            profile['longName'] = info.get('longName') or info.get('shortName')
+        except Exception:
+            return profile
+        return profile
+
+    def suggest_proxy_ticker(self, ticker, region='US', benchmark_ticker='SPY'):
+        upper_ticker = str(ticker).upper()
+        if upper_ticker.endswith('.T'):
+            return '1306.T', 'Japan broad-market proxy'
+
+        profile = self.get_ticker_profile(ticker)
+        quote_type = str(profile.get('quoteType') or '').lower()
+        sector = str(profile.get('sector') or '').lower()
+        industry = str(profile.get('industry') or '').lower()
+        long_name = str(profile.get('longName') or '').lower()
+
+        if 'etf' in quote_type:
+            if region == 'Japan':
+                return '1306.T', 'Japan ETF proxy'
+            if region == 'Global':
+                return 'VT', 'Global ETF proxy'
+            return benchmark_ticker, 'US ETF proxy'
+
+        for keyword, proxy in self.industry_keyword_proxies.items():
+            if keyword in industry or keyword in long_name:
+                return proxy, f'Industry keyword match: {keyword}'
+
+        if sector in self.us_sector_proxies:
+            return self.us_sector_proxies[sector], f'Sector match: {sector}'
+
+        if region == 'Japan':
+            return '1306.T', 'Japan broad-market proxy'
+        if region == 'Global':
+            return 'VT', 'Global broad-market proxy'
+        return benchmark_ticker, 'US broad-market proxy'
+
+    def build_proxy_extended_history(self, returns_df, tickers, base_currency='JPY', region='US', benchmark_ticker='SPY'):
+        if returns_df.empty:
+            return returns_df, {}
+
+        proxy_assignments = {}
+        proxy_universe = []
+        for ticker in tickers:
+            actual = returns_df[ticker] if ticker in returns_df.columns else pd.Series(dtype=float)
+            missing_months = int(actual.isna().sum()) if not actual.empty else 0
+            if actual.empty or missing_months > 0:
+                proxy_ticker, reason = self.suggest_proxy_ticker(ticker, region=region, benchmark_ticker=benchmark_ticker)
+                if proxy_ticker and proxy_ticker != ticker:
+                    proxy_assignments[ticker] = {'proxy_ticker': proxy_ticker, 'reason': reason}
+                    proxy_universe.append(proxy_ticker)
+
+        if not proxy_assignments:
+            return returns_df, {}
+
+        proxy_universe = sorted(set(proxy_universe))
+        proxy_returns = self.fetch_historical_prices(proxy_universe, base_currency=base_currency)
+        extended = returns_df.copy()
+        metadata = {}
+
+        for ticker, assignment in proxy_assignments.items():
+            proxy_ticker = assignment['proxy_ticker']
+            if proxy_ticker not in proxy_returns.columns or ticker not in extended.columns:
+                continue
+
+            actual = extended[ticker]
+            proxy_series = proxy_returns[proxy_ticker].reindex(extended.index)
+            missing_mask = actual.isna()
+            proxy_fill_mask = missing_mask & proxy_series.notna()
+            if proxy_fill_mask.sum() == 0:
+                continue
+
+            extended.loc[proxy_fill_mask, ticker] = proxy_series.loc[proxy_fill_mask]
+            metadata[ticker] = {
+                'proxy_ticker': proxy_ticker,
+                'reason': assignment['reason'],
+                'proxy_months_used': int(proxy_fill_mask.sum()),
+                'first_actual_date': str(actual.first_valid_index().date()) if actual.notna().any() else None,
+            }
+
+        return extended, metadata
+
 class PortfolioAnalyzer:
     @staticmethod
     def _should_rebalance(date, rebalance_freq):
@@ -245,7 +362,7 @@ class PortfolioAnalyzer:
             metadata['window_rule'] = 'all_assets_common_history'
         else:
             working_returns = working_returns.loc[working_returns.notna().any(axis=1)]
-            metadata['window_rule'] = 'available_assets_by_month'
+            metadata['window_rule'] = 'proxy_filled_history' if analysis_mode == 'proxy' else 'available_assets_by_month'
 
         if working_returns.empty:
             metadata['months'] = 0
