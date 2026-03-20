@@ -203,7 +203,10 @@ if analyze_btn:
                 st.stop()
 
             tickers = list(valid_assets.keys())
-            hist_returns = engine.fetch_historical_prices(tickers)
+            hist_returns = engine.fetch_historical_prices(
+                tickers,
+                base_currency=st.session_state.base_currency,
+            )
 
             # 💡 除外銘柄のUIへの通知（クリーンアップ済み）
             fetched_tickers = list(hist_returns.columns)
@@ -231,7 +234,11 @@ if analyze_btn:
 
             # ベンチマーク取得
             is_jpy_bench = bench_ticker in ['^TPX', '^N225', '1306.T'] or bench_ticker.endswith('.T')
-            bench_series = engine.fetch_benchmark_data(bench_ticker, is_jpy_asset=is_jpy_bench)
+            bench_series = engine.fetch_benchmark_data(
+                bench_ticker,
+                is_jpy_asset=is_jpy_bench,
+                base_currency=st.session_state.base_currency,
+            )
 
             weights_clean = {k: v['weight'] for k, v in valid_assets.items()}
             
@@ -245,6 +252,7 @@ if analyze_btn:
 
             # ファクター取得
             french_factors = engine.fetch_french_factors(region_code)
+            factor_source = french_factors.attrs.get('factor_data_source', 'unavailable')
 
             # データ保存
             st.session_state.portfolio_data = {
@@ -253,6 +261,7 @@ if analyze_btn:
                 'components': hist_returns,
                 'weights': final_weights,
                 'factors': french_factors,
+                'factor_source': factor_source,
                 'asset_info': valid_assets,
                 'cost_tier': cost_tier,
                 'bench_name': selected_bench_label
@@ -310,7 +319,11 @@ if st.session_state.portfolio_data:
 
     sim_years = 20
     df_stats, final_values = analyzer.run_monte_carlo_simulation(
-        port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv
+        port_ret,
+        n_years=sim_years,
+        n_simulations=7500,
+        initial_investment=init_inv,
+        random_seed=42,
     )
     
     final_median = np.median(final_values) if final_values is not None else 0.0
@@ -444,6 +457,22 @@ if st.session_state.portfolio_data:
             st.plotly_chart(fig_corr_report, width="stretch")
 
     with tabs[1]:
+        factor_source_messages = {
+            'JA': {
+                'datareader': "ファクターデータ取得元: pandas-datareader 経由の Ken French Data Library",
+                'official_zip': "ファクターデータ取得元: Ken French 公式 ZIP ダウンロード",
+                'local_cache': "ファクターデータ取得元: ローカルキャッシュ（通信失敗時の退避データ）",
+            },
+            'EN': {
+                'datareader': "Factor data source: Ken French Data Library via pandas-datareader",
+                'official_zip': "Factor data source: Ken French official ZIP download",
+                'local_cache': "Factor data source: local cache fallback after network retrieval failed",
+            },
+        }
+        factor_source_key = data.get('factor_source')
+        if factor_source_key in factor_source_messages.get(st.session_state.lang, {}):
+            st.caption(factor_source_messages[st.session_state.lang][factor_source_key])
+
         # 💡 ファクターデータが無い時の安全なガードレール
         if data['factors'].empty:
             err_msg = t('msg_err_factor')
