@@ -121,6 +121,20 @@ def dynamic_hist_bins(sample_count):
         return max(6, min(12, sample_count // 2))
     return min(40, max(10, int(np.sqrt(sample_count) * 2)))
 
+
+def format_proxy_summary(proxy_metadata):
+    if not proxy_metadata:
+        return []
+    lines = []
+    for ticker, item in proxy_metadata.items():
+        lines.append(
+            ui_text(
+                f"{ticker} -> {item['proxy_ticker']} / 補完 {item['proxy_months_used']} ヶ月 / {item['reason']}",
+                f"{ticker} -> {item['proxy_ticker']} / filled {item['proxy_months_used']} months / {item['reason']}",
+            )
+        )
+    return lines
+
 # =========================================================
 # 🛠️ セッション状態の初期化
 # =========================================================
@@ -220,23 +234,30 @@ with st.sidebar:
         'JA': {
             "Practical (実務用・柔軟)": 'practical',
             "Strict (研究用・共通期間)": 'strict',
+            "Proxy (類似企業補完)": 'proxy',
         },
         'EN': {
             "Practical (Flexible)": 'practical',
             "Strict (Common Window)": 'strict',
+            "Proxy (Proxy Fill)": 'proxy',
         },
     }
+    mode_options = list(mode_labels[st.session_state.lang].keys())
+    current_mode_index = next(
+        (idx for idx, (_, value) in enumerate(mode_labels[st.session_state.lang].items()) if value == st.session_state.analysis_mode),
+        0,
+    )
     selected_mode_label = st.selectbox(
         ui_text("分析方針", "Analysis Policy"),
-        list(mode_labels[st.session_state.lang].keys()),
-        index=0 if st.session_state.analysis_mode == 'practical' else 1,
+        mode_options,
+        index=current_mode_index,
     )
     analysis_mode = mode_labels[st.session_state.lang][selected_mode_label]
     st.session_state.analysis_mode = analysis_mode
     st.caption(
         ui_text(
-            "Practical はその月に存在する銘柄だけで計算します。Strict は全銘柄の共通期間だけで計算します。",
-            "Practical uses only the assets available in each month. Strict uses only the common history shared by all assets.",
+            "Practical はその月に存在する銘柄だけで計算します。Strict は全銘柄の共通期間だけで計算します。Proxy は不足期間を類似企業・類似 ETF で補完して分析します。",
+            "Practical uses only the assets available in each month. Strict uses only the common history shared by all assets. Proxy fills missing history with similar companies or ETFs.",
         )
     )
 
@@ -306,6 +327,17 @@ if analyze_btn:
                  st.error(t('msg_err_price_fetch'))
                  st.stop()
 
+            effective_returns = hist_returns.copy()
+            proxy_metadata = {}
+            if analysis_mode == 'proxy':
+                effective_returns, proxy_metadata = engine.build_proxy_extended_history(
+                    hist_returns,
+                    tickers,
+                    base_currency=st.session_state.base_currency,
+                    region=region_code,
+                    benchmark_ticker=bench_ticker,
+                )
+
             # ベンチマーク取得
             is_jpy_bench = bench_ticker in ['^TPX', '^N225', '1306.T'] or bench_ticker.endswith('.T')
             bench_series = engine.fetch_benchmark_data(
@@ -318,7 +350,7 @@ if analyze_btn:
             
             # 合成ヒストリー作成
             port_series, final_weights, analysis_meta = PortfolioAnalyzer.create_synthetic_history(
-                hist_returns,
+                effective_returns,
                 weights_clean,
                 benchmark_ret=bench_series,
                 rebalance_freq=rebalance_freq,
@@ -336,7 +368,7 @@ if analyze_btn:
             # ファクター取得
             french_factors = engine.fetch_french_factors(region_code)
             factor_source = french_factors.attrs.get('factor_data_source', 'unavailable')
-            analysis_components = hist_returns.loc[port_series.index]
+            analysis_components = effective_returns.loc[port_series.index]
             benchmark_common_months = len(port_series.index.intersection(bench_series.index)) if not bench_series.empty else 0
             factor_common_months = count_factor_months(port_series, french_factors)
             complete_component_months = len(analysis_components.dropna(how='any'))
@@ -354,6 +386,7 @@ if analyze_btn:
                 'bench_name': selected_bench_label,
                 'analysis_mode': analysis_mode,
                 'analysis_meta': analysis_meta,
+                'proxy_metadata': proxy_metadata,
                 'quality_summary': {
                     'portfolio_months': len(port_series),
                     'benchmark_common_months': benchmark_common_months,
@@ -383,6 +416,7 @@ if st.session_state.portfolio_data:
     analysis_meta = data.get('analysis_meta', {})
     quality_summary = data.get('quality_summary', {})
     analysis_mode = data.get('analysis_mode', 'practical')
+    proxy_metadata = data.get('proxy_metadata', {})
 
     curr_unit = t('currency_jpy') if st.session_state.base_currency == 'JPY' else t('currency_usd')
     init_inv = 1000000 if st.session_state.base_currency == 'JPY' else 10000
@@ -531,6 +565,7 @@ if st.session_state.portfolio_data:
     mode_description = {
         'strict': ui_text("Strict: 全銘柄の共通期間だけで厳密計算", "Strict: common history across all assets"),
         'practical': ui_text("Practical: その月に存在する銘柄だけで柔軟計算", "Practical: flexible monthly available-assets mode"),
+        'proxy': ui_text("Proxy: 類似企業・類似 ETF で不足期間を補完", "Proxy: fill missing history with similar companies or ETFs"),
     }
     st.info(
         ui_text(
@@ -548,6 +583,13 @@ if st.session_state.portfolio_data:
             f"Complete PCA months: {quality_summary.get('complete_component_months', 0)} ({quality_label(quality_summary.get('complete_component_months', 0), 'pca')})",
         )
     )
+    if analysis_mode == 'proxy':
+        if proxy_metadata:
+            with st.expander(ui_text("Proxy 補完の内訳", "Proxy fill details")):
+                for line in format_proxy_summary(proxy_metadata):
+                    st.write(f"- {line}")
+        else:
+            st.caption(ui_text("Proxy モードですが、今回は補完が必要な銘柄はありませんでした。", "Proxy mode was selected, but no proxy fill was needed for this run."))
 
     tabs = st.tabs(t('tab_names'))
 
@@ -725,6 +767,13 @@ if st.session_state.portfolio_data:
 
     with tabs[2]:
         st.subheader(t('graph_hist'))
+        if analysis_mode == 'proxy':
+            st.caption(
+                ui_text(
+                    "このタブの初期期間には、類似企業・類似 ETF による proxy 補完が含まれる場合があります。実績そのものではなく分析用の延長系列です。",
+                    "Early history in this tab may include proxy-filled periods from similar companies or ETFs. It is an analytical extension, not pure realized history.",
+                )
+            )
         
         if not bench_ret.empty:
             common_idx = port_ret.index.intersection(bench_ret.index)
