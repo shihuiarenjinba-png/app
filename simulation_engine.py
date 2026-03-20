@@ -206,88 +206,148 @@ class MarketDataEngine:
             return pd.Series(dtype=float)
 
 class PortfolioAnalyzer:
-    
     @staticmethod
-    def create_synthetic_history(returns_df, weights_dict, benchmark_ret=None, rebalance_freq='M'):
+    def _should_rebalance(date, rebalance_freq):
+        if rebalance_freq == 'M':
+            return True
+        if rebalance_freq == 'Q' and date.month in [3, 6, 9, 12]:
+            return True
+        if rebalance_freq == 'Y' and date.month == 12:
+            return True
+        return False
+
+    @staticmethod
+    def _normalized_available_weights(norm_weights, available_assets):
+        available_weights = pd.Series({asset: norm_weights[asset] for asset in available_assets}, dtype=float)
+        if available_weights.sum() <= 0:
+            return pd.Series(dtype=float)
+        return available_weights / available_weights.sum()
+
+    @staticmethod
+    def create_synthetic_history(returns_df, weights_dict, benchmark_ret=None, rebalance_freq='M', analysis_mode='strict'):
         valid_tickers = [t for t in weights_dict.keys() if t in returns_df.columns]
         if not valid_tickers:
-            return pd.Series(dtype=float), {}
+            return pd.Series(dtype=float), {}, {}
 
         filtered_weights = {k: weights_dict[k] for k in valid_tickers}
         total_weight = sum(filtered_weights.values())
-        norm_weights = {k: v/total_weight for k, v in filtered_weights.items()}
+        norm_weights = {k: v / total_weight for k, v in filtered_weights.items()}
 
         working_returns = returns_df[valid_tickers].copy().sort_index()
-        complete_history = working_returns.notna().all(axis=1)
-        if complete_history.any():
-            first_complete_date = complete_history[complete_history].index[0]
-            working_returns = working_returns.loc[first_complete_date:]
+        metadata = {
+            'analysis_mode': analysis_mode,
+            'valid_tickers': valid_tickers,
+            'requested_assets': len(valid_tickers),
+        }
 
-        # 共通ヒストリー開始後の細かな欠損のみ 0 扱いにして、初期期間の歪みを避ける
-        filled_returns = working_returns.fillna(0.0)
-        
+        if analysis_mode == 'strict':
+            working_returns = working_returns.dropna(how='any')
+            metadata['window_rule'] = 'all_assets_common_history'
+        else:
+            working_returns = working_returns.loc[working_returns.notna().any(axis=1)]
+            metadata['window_rule'] = 'available_assets_by_month'
+
+        if working_returns.empty:
+            metadata['months'] = 0
+            metadata['active_asset_min'] = 0
+            metadata['active_asset_max'] = 0
+            metadata['start_date'] = None
+            metadata['end_date'] = None
+            return pd.Series(dtype=float), norm_weights, metadata
+
         port_ret_list = []
-        current_weights = pd.Series(norm_weights, dtype=float)
-        
-        for date, row in filled_returns.iterrows():
-            ret = (current_weights * row).sum()
-            port_ret_list.append(ret)
-            
-            current_weights = current_weights * (1 + row)
-            if current_weights.sum() > 0:
-                current_weights /= current_weights.sum()
-            else:
-                current_weights = pd.Series(norm_weights) 
-            
-            do_rebalance = False
-            if rebalance_freq == 'M':   
-                do_rebalance = True
-            elif rebalance_freq == 'Q' and date.month in [3, 6, 9, 12]:  
-                do_rebalance = True
-            elif rebalance_freq == 'Y' and date.month == 12:  
-                do_rebalance = True
-                
-            if do_rebalance:
-                current_weights = pd.Series(norm_weights)
-                
-        port_series = pd.Series(port_ret_list, index=filled_returns.index)
-        return port_series, norm_weights
+        port_dates = []
+        active_counts = []
+
+        if analysis_mode == 'strict':
+            current_weights = pd.Series(norm_weights, dtype=float)
+            for date, row in working_returns.iterrows():
+                port_ret_list.append((current_weights * row).sum())
+                port_dates.append(date)
+                active_counts.append(int(row.notna().sum()))
+
+                current_weights = current_weights * (1 + row)
+                if current_weights.sum() > 0:
+                    current_weights /= current_weights.sum()
+                else:
+                    current_weights = pd.Series(norm_weights, dtype=float)
+
+                if PortfolioAnalyzer._should_rebalance(date, rebalance_freq):
+                    current_weights = pd.Series(norm_weights, dtype=float)
+        else:
+            current_weights = pd.Series(0.0, index=valid_tickers, dtype=float)
+            for date, row in working_returns.iterrows():
+                available_assets = row.dropna().index.tolist()
+                if not available_assets:
+                    continue
+
+                active_counts.append(len(available_assets))
+                effective_weights = current_weights[available_assets]
+                if effective_weights.sum() <= 0:
+                    effective_weights = PortfolioAnalyzer._normalized_available_weights(norm_weights, available_assets)
+                else:
+                    effective_weights = effective_weights / effective_weights.sum()
+
+                active_returns = row[available_assets]
+                port_ret_list.append((effective_weights * active_returns).sum())
+                port_dates.append(date)
+
+                updated_weights = effective_weights * (1 + active_returns)
+                if updated_weights.sum() > 0:
+                    updated_weights = updated_weights / updated_weights.sum()
+                else:
+                    updated_weights = PortfolioAnalyzer._normalized_available_weights(norm_weights, available_assets)
+
+                current_weights = pd.Series(0.0, index=valid_tickers, dtype=float)
+                current_weights.loc[available_assets] = updated_weights
+
+                if PortfolioAnalyzer._should_rebalance(date, rebalance_freq):
+                    rebalanced = PortfolioAnalyzer._normalized_available_weights(norm_weights, available_assets)
+                    current_weights = pd.Series(0.0, index=valid_tickers, dtype=float)
+                    current_weights.loc[available_assets] = rebalanced
+
+        port_series = pd.Series(port_ret_list, index=port_dates, dtype=float)
+        metadata['months'] = len(port_series)
+        metadata['active_asset_min'] = min(active_counts) if active_counts else 0
+        metadata['active_asset_max'] = max(active_counts) if active_counts else 0
+        metadata['start_date'] = str(port_series.index.min().date()) if not port_series.empty else None
+        metadata['end_date'] = str(port_series.index.max().date()) if not port_series.empty else None
+        return port_series, norm_weights, metadata
 
     @staticmethod
-    def calculate_correlation_matrix(returns_df):
+    def calculate_correlation_matrix(returns_df, min_periods=12):
         if returns_df.empty:
             return pd.DataFrame()
-        return returns_df.corr()
+        return returns_df.corr(min_periods=min_periods)
 
     @staticmethod
-    def perform_factor_regression(port_ret, factor_df):
+    def perform_factor_regression(port_ret, factor_df, min_months=24):
         if port_ret.empty or factor_df is None or factor_df.empty:
-            return None, None
+            return None, None, 0
 
         df_y = port_ret.to_frame(name='y')
         df_x = factor_df.copy()
-        
-        # 💡【修正箇所】両方のデータがすでにきれいなDatetimeIndexで揃っているため、to_period変換を削除してそのまま結合
         common_idx = df_y.index.intersection(df_x.index)
         if common_idx.empty:
-            return None, None
-            
+            return None, None, 0
+
         merged = pd.concat([df_y.loc[common_idx], df_x.loc[common_idx]], axis=1).dropna()
-        if merged.empty: return None, None
-        
+        sample_count = len(merged)
+        if sample_count < min_months:
+            return None, None, sample_count
+
         y = merged['y']
         X_cols = [c for c in merged.columns if c in ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA']]
-        if not X_cols: return None, None
-        
-        X = merged[X_cols]
-        X = sm.add_constant(X)
+        if not X_cols:
+            return None, None, sample_count
 
+        X = sm.add_constant(merged[X_cols])
         try:
             model = sm.OLS(y, X)
             results = model.fit()
-            return results.params, results.rsquared
+            return results.params, results.rsquared, sample_count
         except:
-            return None, None
+            return None, None, sample_count
 
     @staticmethod
     def run_monte_carlo_simulation(port_ret, n_years=20, n_simulations=7500, initial_investment=1000000, random_seed=42):
@@ -393,43 +453,40 @@ class PortfolioAnalyzer:
         return pca.explained_variance_ratio_[0], loadings
 
     @staticmethod
-    def rolling_beta_analysis(port_ret, factor_df, window=24):
+    def rolling_beta_analysis(port_ret, factor_df, window=24, min_months=24):
         if factor_df is None or factor_df.empty or port_ret.empty:
-            return pd.DataFrame()
+            return pd.DataFrame(), 0, None
 
         df_y = port_ret.to_frame(name='y')
         df_x = factor_df.copy()
-        
-        # 💡【修正箇所】to_period変換を完全に削除してそのまま結合
         common_idx = df_y.index.intersection(df_x.index)
-        if common_idx.empty: 
-            return pd.DataFrame()
-            
+        if common_idx.empty:
+            return pd.DataFrame(), 0, None
+
         merged = pd.concat([df_y.loc[common_idx], df_x.loc[common_idx]], axis=1).dropna()
-        if merged.empty: return pd.DataFrame()
-        
+        sample_count = len(merged)
+        if sample_count < min_months:
+            return pd.DataFrame(), sample_count, None
+
         y = merged['y']
-        X_cols = [c for c in merged.columns if c != 'y']
-        X = merged[X_cols]
-        
-        data_len = len(y)
-        if data_len < window:
-            window = max(6, int(data_len / 2))
-        if data_len < window:
-            return pd.DataFrame()
+        X = merged[[c for c in merged.columns if c != 'y']]
+
+        actual_window = window
+        if sample_count < window * 2:
+            actual_window = max(12, sample_count // 2)
+        if sample_count < actual_window or actual_window < 12:
+            return pd.DataFrame(), sample_count, actual_window
 
         try:
             X_const = sm.add_constant(X)
-            model = RollingOLS(y, X_const, window=window)
+            model = RollingOLS(y, X_const, window=actual_window)
             rres = model.fit()
             params = rres.params.copy()
             if 'const' in params.columns:
                 params = params.drop(columns=['const'])
-            
-            # 💡【修正箇所】最初からDatetimeIndexのため、to_timestamp()で戻す処理を削除
-            return params.dropna()
+            return params.dropna(), sample_count, actual_window
         except:
-            return pd.DataFrame()
+            return pd.DataFrame(), sample_count, actual_window
 
     @staticmethod
     def cost_drag_simulation(port_ret, cost_tier):
