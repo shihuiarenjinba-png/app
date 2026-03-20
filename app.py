@@ -74,6 +74,53 @@ def t(key):
     else:
         return en.TEXTS.get(key, key)
 
+
+def ui_text(ja_text, en_text):
+    return ja_text if st.session_state.get('lang', 'JA') == 'JA' else en_text
+
+
+ANALYSIS_REQUIREMENTS = {
+    'info_ratio': {'min_months': 12, 'stable_months': 24},
+    'factor_regression': {'min_months': 24, 'stable_months': 36},
+    'rolling': {'min_months': 24, 'stable_months': 48},
+    'distribution': {'min_months': 12, 'stable_months': 24},
+    'simulation': {'min_months': 12, 'stable_months': 36},
+    'pca': {'min_months': 12, 'stable_months': 24},
+    'attribution': {'min_months': 12, 'stable_months': 24},
+}
+
+
+def quality_label(sample_count, key):
+    req = ANALYSIS_REQUIREMENTS[key]
+    if sample_count < req['min_months']:
+        return ui_text("不足", "Insufficient")
+    if sample_count < req['stable_months']:
+        return ui_text("参考値", "Indicative")
+    return ui_text("安定", "Stable")
+
+
+def build_window_text(start_date, end_date, months):
+    if not start_date or not end_date or not months:
+        return ui_text("期間情報なし", "No window information")
+    return ui_text(
+        f"{start_date} から {end_date} / {months} ヶ月",
+        f"{start_date} to {end_date} / {months} months",
+    )
+
+
+def count_factor_months(port_ret, factor_df):
+    if port_ret.empty or factor_df is None or factor_df.empty:
+        return 0
+    return len(pd.concat([port_ret.to_frame(name='y'), factor_df], axis=1).dropna())
+
+
+def dynamic_hist_bins(sample_count):
+    if sample_count <= 8:
+        return max(4, sample_count)
+    if sample_count <= 24:
+        return max(6, min(12, sample_count // 2))
+    return min(40, max(10, int(np.sqrt(sample_count) * 2)))
+
 # =========================================================
 # 🛠️ セッション状態の初期化
 # =========================================================
@@ -91,6 +138,8 @@ if 'payload' not in st.session_state:
     st.session_state.payload = None
 if 'figs' not in st.session_state:
     st.session_state.figs = {}
+if 'analysis_mode' not in st.session_state:
+    st.session_state.analysis_mode = 'practical'
 
 # タイトル表示（辞書適用）
 st.title(t('title'))
@@ -165,6 +214,31 @@ with st.sidebar:
     )
     rebalance_map = {"月次 (Monthly)": 'M', "四半期 (Quarterly)": 'Q', "年次 (Yearly)": 'Y', "なし (Buy & Hold)": None}
     rebalance_freq = rebalance_map[rebalance_label]
+
+    st.markdown("### 🧪 分析モード")
+    mode_labels = {
+        'JA': {
+            "Practical (実務用・柔軟)": 'practical',
+            "Strict (研究用・共通期間)": 'strict',
+        },
+        'EN': {
+            "Practical (Flexible)": 'practical',
+            "Strict (Common Window)": 'strict',
+        },
+    }
+    selected_mode_label = st.selectbox(
+        ui_text("分析方針", "Analysis Policy"),
+        list(mode_labels[st.session_state.lang].keys()),
+        index=0 if st.session_state.analysis_mode == 'practical' else 1,
+    )
+    analysis_mode = mode_labels[st.session_state.lang][selected_mode_label]
+    st.session_state.analysis_mode = analysis_mode
+    st.caption(
+        ui_text(
+            "Practical はその月に存在する銘柄だけで計算します。Strict は全銘柄の共通期間だけで計算します。",
+            "Practical uses only the assets available in each month. Strict uses only the common history shared by all assets.",
+        )
+    )
 
     st.markdown(f"### {t('sb_sec4')}")
     st.caption(t('sb_adv_caption'))
@@ -243,28 +317,49 @@ if analyze_btn:
             weights_clean = {k: v['weight'] for k, v in valid_assets.items()}
             
             # 合成ヒストリー作成
-            try:
-                port_series, final_weights = PortfolioAnalyzer.create_synthetic_history(
-                    hist_returns, weights_clean, benchmark_ret=bench_series, rebalance_freq=rebalance_freq
+            port_series, final_weights, analysis_meta = PortfolioAnalyzer.create_synthetic_history(
+                hist_returns,
+                weights_clean,
+                benchmark_ret=bench_series,
+                rebalance_freq=rebalance_freq,
+                analysis_mode=analysis_mode,
+            )
+            if port_series.empty:
+                st.error(
+                    ui_text(
+                        "この設定では分析に必要な履歴を作れませんでした。分析モードや銘柄構成を見直してください。",
+                        "This configuration could not produce enough history for analysis. Please review the analysis mode or asset mix.",
+                    )
                 )
-            except TypeError:
-                port_series, final_weights = PortfolioAnalyzer.create_synthetic_history(hist_returns, weights_clean)
+                st.stop()
 
             # ファクター取得
             french_factors = engine.fetch_french_factors(region_code)
             factor_source = french_factors.attrs.get('factor_data_source', 'unavailable')
+            analysis_components = hist_returns.loc[port_series.index]
+            benchmark_common_months = len(port_series.index.intersection(bench_series.index)) if not bench_series.empty else 0
+            factor_common_months = count_factor_months(port_series, french_factors)
+            complete_component_months = len(analysis_components.dropna(how='any'))
 
             # データ保存
             st.session_state.portfolio_data = {
                 'returns': port_series,
                 'benchmark': bench_series,
-                'components': hist_returns,
+                'components': analysis_components,
                 'weights': final_weights,
                 'factors': french_factors,
                 'factor_source': factor_source,
                 'asset_info': valid_assets,
                 'cost_tier': cost_tier,
-                'bench_name': selected_bench_label
+                'bench_name': selected_bench_label,
+                'analysis_mode': analysis_mode,
+                'analysis_meta': analysis_meta,
+                'quality_summary': {
+                    'portfolio_months': len(port_series),
+                    'benchmark_common_months': benchmark_common_months,
+                    'factor_common_months': factor_common_months,
+                    'complete_component_months': complete_component_months,
+                },
             }
             
             # キャッシュクリア
@@ -285,6 +380,9 @@ if st.session_state.portfolio_data:
     analyzer = PortfolioAnalyzer()
     port_ret = data['returns']
     bench_ret = data['benchmark']
+    analysis_meta = data.get('analysis_meta', {})
+    quality_summary = data.get('quality_summary', {})
+    analysis_mode = data.get('analysis_mode', 'practical')
 
     curr_unit = t('currency_jpy') if st.session_state.base_currency == 'JPY' else t('currency_usd')
     init_inv = 1000000 if st.session_state.base_currency == 'JPY' else 10000
@@ -311,34 +409,58 @@ if st.session_state.portfolio_data:
     sharpe_ratio = (cagr - 0.02) / vol if vol > 0 else 0.0
 
     # --- 2. 高度計算 & 分析レポート ---
-    params, r_sq = analyzer.perform_factor_regression(port_ret, data['factors'])
+    params, r_sq, factor_sample_count = analyzer.perform_factor_regression(
+        port_ret,
+        data['factors'],
+        min_months=ANALYSIS_REQUIREMENTS['factor_regression']['min_months'],
+    )
     if params is not None and not params.empty:
         factor_comment = PortfolioDiagnosticEngine.generate_factor_report(params, lang=st.session_state.lang)
     else:
-        factor_comment = "ファクターデータが不足しているため分析できません。"
+        factor_comment = ui_text(
+            "ファクターデータまたは共通期間が不足しているため分析できません。",
+            "Factor data or overlap is insufficient for regression.",
+        )
 
     sim_years = 20
-    df_stats, final_values = analyzer.run_monte_carlo_simulation(
-        port_ret,
-        n_years=sim_years,
-        n_simulations=7500,
-        initial_investment=init_inv,
-        random_seed=42,
-    )
+    simulation_months = len(port_ret.dropna())
+    df_stats, final_values = (None, None)
+    if simulation_months >= ANALYSIS_REQUIREMENTS['simulation']['min_months']:
+        df_stats, final_values = analyzer.run_monte_carlo_simulation(
+            port_ret,
+            n_years=sim_years,
+            n_simulations=7500,
+            initial_investment=init_inv,
+            random_seed=42,
+        )
     
     final_median = np.median(final_values) if final_values is not None else 0.0
     final_p10 = np.percentile(final_values, 10) if final_values is not None else 0.0
     final_p90 = np.percentile(final_values, 90) if final_values is not None else 0.0
     
-    comp_clean_for_analysis = data['components'].dropna()
+    component_returns = data['components']
+    comp_clean_for_analysis = component_returns.dropna(how='any')
     
-    corr_matrix = analyzer.calculate_correlation_matrix(comp_clean_for_analysis)
+    corr_matrix = analyzer.calculate_correlation_matrix(
+        component_returns,
+        min_periods=ANALYSIS_REQUIREMENTS['pca']['min_months'],
+    )
     fig_corr_report = None
     if not corr_matrix.empty:
         fig_corr_report = px.imshow(corr_matrix, text_auto='.2f', aspect="auto", color_continuous_scale='RdBu_r', zmin=-1, zmax=1)
 
-    pca_ratio, _ = analyzer.perform_pca(comp_clean_for_analysis)
-    report = PortfolioDiagnosticEngine.generate_report(data['weights'], pca_ratio, port_ret, lang=st.session_state.lang)
+    pca_available = len(comp_clean_for_analysis) >= ANALYSIS_REQUIREMENTS['pca']['min_months'] and comp_clean_for_analysis.shape[1] > 1
+    if pca_available:
+        pca_ratio, _ = analyzer.perform_pca(comp_clean_for_analysis)
+        report = PortfolioDiagnosticEngine.generate_report(data['weights'], pca_ratio, port_ret, lang=st.session_state.lang)
+    else:
+        pca_ratio = np.nan
+        report = {
+            'type': ui_text("🧭 分散診断は保留", "🧭 Diversification diagnosis pending"),
+            'diversification_comment': ui_text("PCA に必要な完全月数が不足しているため、分散診断はまだ参考表示にしません。", "PCA does not yet have enough complete history, so diversification diagnosis is deferred."),
+            'risk_comment': ui_text("ポートフォリオ自体の計算は継続していますが、この診断だけは保守的に保留しています。", "The portfolio calculations still run, but this diagnosis is conservatively deferred."),
+            'action_plan': ui_text("完全月数が増えたら自動で診断を再開できます。", "The diagnosis can resume automatically once the complete overlap grows."),
+        }
 
     detailed_review = []
     if sharpe_ratio > 1.0:
@@ -398,6 +520,34 @@ if st.session_state.portfolio_data:
 
     if not np.isnan(info_ratio):
         st.caption(t('cap_info_ratio').format(bench=data['bench_name'], info_ratio=info_ratio, track_err=track_err))
+    else:
+        st.caption(
+            ui_text(
+                f"ベンチマーク比較は {ANALYSIS_REQUIREMENTS['info_ratio']['min_months']} ヶ月以上で安定します。現在の共通月数は {quality_summary.get('benchmark_common_months', 0)} です。",
+                f"Benchmark comparison stabilizes after {ANALYSIS_REQUIREMENTS['info_ratio']['min_months']} months. Current overlap: {quality_summary.get('benchmark_common_months', 0)} months.",
+            )
+        )
+
+    mode_description = {
+        'strict': ui_text("Strict: 全銘柄の共通期間だけで厳密計算", "Strict: common history across all assets"),
+        'practical': ui_text("Practical: その月に存在する銘柄だけで柔軟計算", "Practical: flexible monthly available-assets mode"),
+    }
+    st.info(
+        ui_text(
+            f"分析モード: {mode_description.get(analysis_mode, analysis_mode)} / 使用期間: {build_window_text(analysis_meta.get('start_date'), analysis_meta.get('end_date'), analysis_meta.get('months'))}",
+            f"Analysis mode: {mode_description.get(analysis_mode, analysis_mode)} / Window: {build_window_text(analysis_meta.get('start_date'), analysis_meta.get('end_date'), analysis_meta.get('months'))}",
+        )
+    )
+    st.caption(
+        ui_text(
+            f"共通ベンチマーク月数: {quality_summary.get('benchmark_common_months', 0)} ({quality_label(quality_summary.get('benchmark_common_months', 0), 'info_ratio')}) / "
+            f"ファクター回帰月数: {factor_sample_count} ({quality_label(factor_sample_count, 'factor_regression')}) / "
+            f"PCA完全月数: {quality_summary.get('complete_component_months', 0)} ({quality_label(quality_summary.get('complete_component_months', 0), 'pca')})",
+            f"Benchmark overlap: {quality_summary.get('benchmark_common_months', 0)} ({quality_label(quality_summary.get('benchmark_common_months', 0), 'info_ratio')}) / "
+            f"Factor months: {factor_sample_count} ({quality_label(factor_sample_count, 'factor_regression')}) / "
+            f"Complete PCA months: {quality_summary.get('complete_component_months', 0)} ({quality_label(quality_summary.get('complete_component_months', 0), 'pca')})",
+        )
+    )
 
     tabs = st.tabs(t('tab_names'))
 
@@ -405,19 +555,32 @@ if st.session_state.portfolio_data:
         c1, c2 = st.columns([1, 1], gap="medium")
         with c1:
             st.subheader(t('sub_pca'))
-            fig_gauge = go.Figure(go.Indicator(
-                mode = "gauge+number", value = pca_ratio * 100, 
-                title = {'text': t('pca_gauge_title')},
-                gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': COLORS['main']},
-                         'steps': [{'range': [0, 60], 'color': "#333"}, {'range': [60, 100], 'color': "#555"}],
-                         'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 85}}
-            ))
-            # 💡 修正箇所：use_container_width=True を width="stretch" に変更（以下すべて同様）
-            st.plotly_chart(fig_gauge, width="stretch")
+            if len(comp_clean_for_analysis) >= ANALYSIS_REQUIREMENTS['pca']['min_months'] and comp_clean_for_analysis.shape[1] > 1:
+                fig_gauge = go.Figure(go.Indicator(
+                    mode = "gauge+number", value = pca_ratio * 100, 
+                    title = {'text': t('pca_gauge_title')},
+                    gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': COLORS['main']},
+                             'steps': [{'range': [0, 60], 'color': "#333"}, {'range': [60, 100], 'color': "#555"}],
+                             'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 85}}
+                ))
+                st.plotly_chart(fig_gauge, width="stretch")
+                st.caption(
+                    ui_text(
+                        f"PCA に使えた完全月数: {len(comp_clean_for_analysis)} ({quality_label(len(comp_clean_for_analysis), 'pca')})",
+                        f"Complete months used for PCA: {len(comp_clean_for_analysis)} ({quality_label(len(comp_clean_for_analysis), 'pca')})",
+                    )
+                )
+            else:
+                st.info(
+                    ui_text(
+                        f"PCA は完全月数が {ANALYSIS_REQUIREMENTS['pca']['min_months']} ヶ月以上必要です。現在は {len(comp_clean_for_analysis)} ヶ月です。",
+                        f"PCA needs at least {ANALYSIS_REQUIREMENTS['pca']['min_months']} complete months. Current: {len(comp_clean_for_analysis)} months.",
+                    )
+                )
             
             st.markdown(t('sub_pca_map'))
             try:
-                if not comp_clean_for_analysis.empty and comp_clean_for_analysis.shape[1] > 1:
+                if len(comp_clean_for_analysis) >= ANALYSIS_REQUIREMENTS['pca']['min_months'] and comp_clean_for_analysis.shape[1] > 1:
                     pca = PCA(n_components=2)
                     pca_coords = pca.fit_transform(comp_clean_for_analysis.T)
                     labels = comp_clean_for_analysis.columns
@@ -492,7 +655,12 @@ if st.session_state.portfolio_data:
                     ))
                     fig_beta.update_layout(title=t('graph_beta'), xaxis_title="感応度", height=300)
                     st.plotly_chart(fig_beta, width="stretch")
-                    st.caption(f"決定係数 (R²): {r_sq:.2%} (モデル説明力)")
+                    st.caption(
+                        ui_text(
+                            f"決定係数 (R²): {r_sq:.2%} / 回帰月数: {factor_sample_count} ({quality_label(factor_sample_count, 'factor_regression')})",
+                            f"R²: {r_sq:.2%} / Regression months: {factor_sample_count} ({quality_label(factor_sample_count, 'factor_regression')})",
+                        )
+                    )
                     figs_for_report['factors'] = fig_beta
                 
                 with c2:
@@ -504,11 +672,21 @@ if st.session_state.portfolio_data:
                     </div>
                     """, unsafe_allow_html=True)
             else:
-                st.warning("回帰分析に必要な共通期間のデータが不足しているため、スタイル分析を実行できません。")
+                st.warning(
+                    ui_text(
+                        f"回帰分析には少なくとも {ANALYSIS_REQUIREMENTS['factor_regression']['min_months']} ヶ月の共通データが必要です。現在は {factor_sample_count} ヶ月です。",
+                        f"Factor regression needs at least {ANALYSIS_REQUIREMENTS['factor_regression']['min_months']} overlapping months. Current: {factor_sample_count}.",
+                    )
+                )
             
             st.markdown("---")
             st.subheader(t('sub_rolling'))
-            rolling_betas = analyzer.rolling_beta_analysis(port_ret, data['factors'])
+            rolling_betas, rolling_sample_count, rolling_window = analyzer.rolling_beta_analysis(
+                port_ret,
+                data['factors'],
+                window=24,
+                min_months=ANALYSIS_REQUIREMENTS['rolling']['min_months'],
+            )
             
             if not rolling_betas.empty:
                 fig_roll = go.Figure()
@@ -530,8 +708,20 @@ if st.session_state.portfolio_data:
 
                 fig_roll.update_layout(title=t('graph_roll'), yaxis_title="Beta", height=400)
                 st.plotly_chart(fig_roll, width="stretch")
+                if rolling_window:
+                    st.caption(
+                        ui_text(
+                            f"ローリング窓: {rolling_window} ヶ月 / 利用月数: {rolling_sample_count}",
+                            f"Rolling window: {rolling_window} months / Sample count: {rolling_sample_count}",
+                        )
+                    )
             else:
-                st.info(t('msg_rolling_req'))
+                st.info(
+                    ui_text(
+                        f"ローリング分析には少なくとも {ANALYSIS_REQUIREMENTS['rolling']['min_months']} ヶ月が必要です。現在は {rolling_sample_count} ヶ月です。",
+                        f"Rolling analysis needs at least {ANALYSIS_REQUIREMENTS['rolling']['min_months']} months. Current: {rolling_sample_count}.",
+                    )
+                )
 
     with tabs[2]:
         st.subheader(t('graph_hist'))
@@ -581,6 +771,15 @@ if st.session_state.portfolio_data:
         st.markdown("---")
         st.subheader(t('sub_ret_dist'))
         mu, std = port_ret.mean(), port_ret.std()
+        dist_sample_count = len(port_ret.dropna())
+
+        if dist_sample_count < ANALYSIS_REQUIREMENTS['distribution']['min_months']:
+            st.info(
+                ui_text(
+                    f"ヒストグラムは少なくとも {ANALYSIS_REQUIREMENTS['distribution']['min_months']} ヶ月ほしいです。現在は {dist_sample_count} ヶ月なので参考表示に留めます。",
+                    f"The histogram works best with at least {ANALYSIS_REQUIREMENTS['distribution']['min_months']} months. Current: {dist_sample_count} months.",
+                )
+            )
         
         fig_dist = go.Figure()
         fig_dist.add_trace(go.Histogram(
@@ -589,16 +788,22 @@ if st.session_state.portfolio_data:
             name=t('leg_hist_ret'), 
             marker_color=COLORS['hist_bar'], 
             opacity=0.75, 
-            nbinsx=60
+            nbinsx=dynamic_hist_bins(dist_sample_count)
         ))
         
-        if not np.isnan(std) and std > 0:
+        if dist_sample_count >= ANALYSIS_REQUIREMENTS['distribution']['min_months'] and not np.isnan(std) and std > 0:
             x_range = np.linspace(port_ret.min(), port_ret.max(), 100)
             y_norm = (1 / (np.sqrt(2 * np.pi) * std)) * np.exp(-0.5 * ((x_range - mu) / std) ** 2)
             fig_dist.add_trace(go.Scatter(x=x_range, y=y_norm, mode='lines', name=t('leg_norm_dist'), line=dict(color='white', dash='dash', width=2)))
         
         fig_dist.update_layout(title=t('graph_dist'), xaxis_title=t('dist_ret'), yaxis_title=t('dist_density'), height=400)
         st.plotly_chart(fig_dist, width="stretch")
+        st.caption(
+            ui_text(
+                f"ヒストグラム月数: {dist_sample_count} ({quality_label(dist_sample_count, 'distribution')})",
+                f"Histogram months: {dist_sample_count} ({quality_label(dist_sample_count, 'distribution')})",
+            )
+        )
 
     with tabs[3]:
         st.subheader(t('sub_cost_sim'))
@@ -642,7 +847,10 @@ if st.session_state.portfolio_data:
 
     with tabs[4]:
         st.subheader(t('sub_attr'))
-        attrib = analyzer.calculate_strict_attribution(data['components'], data['weights'])
+        attrib_input = data['components'].dropna(how='any')
+        attrib = pd.Series(dtype=float)
+        if len(attrib_input) >= ANALYSIS_REQUIREMENTS['attribution']['min_months']:
+            attrib = analyzer.calculate_strict_attribution(attrib_input, data['weights'])
         
         if not attrib.empty:
             weights_series = pd.Series(data['weights'])
@@ -700,6 +908,13 @@ if st.session_state.portfolio_data:
             st.plotly_chart(fig_abs, width="stretch")
 
             figs_for_report['attribution'] = fig_rel
+        else:
+            st.info(
+                ui_text(
+                    f"寄与度分析には完全な月次履歴が {ANALYSIS_REQUIREMENTS['attribution']['min_months']} ヶ月以上必要です。現在は {len(attrib_input)} ヶ月です。",
+                    f"Attribution needs at least {ANALYSIS_REQUIREMENTS['attribution']['min_months']} complete monthly observations. Current: {len(attrib_input)}.",
+                )
+            )
 
     with tabs[5]:
         st.subheader(t('sub_mc'))
@@ -754,6 +969,19 @@ if st.session_state.portfolio_data:
             st.plotly_chart(fig_mc_hist, width="stretch")
             
             st.success(t('msg_sim_complete'))
+            st.caption(
+                ui_text(
+                    f"モンテカルロ月数: {simulation_months} ({quality_label(simulation_months, 'simulation')}) / 固定シード 42",
+                    f"Monte Carlo months: {simulation_months} ({quality_label(simulation_months, 'simulation')}) / fixed seed 42",
+                )
+            )
+        else:
+            st.info(
+                ui_text(
+                    f"モンテカルロには少なくとも {ANALYSIS_REQUIREMENTS['simulation']['min_months']} ヶ月ほしいです。現在は {simulation_months} ヶ月です。",
+                    f"Monte Carlo needs at least {ANALYSIS_REQUIREMENTS['simulation']['min_months']} months. Current: {simulation_months}.",
+                )
+            )
 
     # セッションへの保存 (分析完了フラグとグラフデータ)
     st.session_state.analysis_done = True
