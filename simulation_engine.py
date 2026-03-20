@@ -5,9 +5,9 @@ import yfinance as yf
 import statsmodels.api as sm
 from statsmodels.regression.rolling import RollingOLS
 from sklearn.decomposition import PCA
-import pandas_datareader.data as web
 from datetime import datetime
-import requests
+
+from factor_data_loader import load_factor_dataset
 
 # 🔻追加: 多言語辞書モジュールの読み込み
 try:
@@ -86,77 +86,14 @@ class MarketDataEngine:
     @st.cache_data(ttl=3600*24*7)
     def fetch_french_factors(_self, region='US'):
         """Fetch Fama-French 5 Factors."""
-        name = 'F-F_Research_Data_5_Factors_2x3'
-        if region == 'Japan': 
-            name = 'Japan_5_Factors' 
-        elif region == 'Global': 
-            name = 'Global_5_Factors'
-
         try:
-            # 1. データ抽出フィルター
-            ff_dict = web.DataReader(name, 'famafrench', start=_self.start_date, end=_self.end_date)
-            if not ff_dict: 
-                print(f"Warning: Empty dictionary returned for dataset {name}")
-                return pd.DataFrame()
-            
-            ff_data = ff_dict[0]
-
-            # 2. カラム整形フィルター
-            ff_data.columns = [str(c).strip() for c in ff_data.columns]
-            
-            if ff_data.max().max() > 0.5:
-                ff_data = ff_data / 100.0
-
-            # 3. 日付インデックス矯正フィルター（最重要）
-            if isinstance(ff_data.index, pd.PeriodIndex):
-                ff_data.index = ff_data.index.to_timestamp()
-            else:
-                ff_data.index = pd.to_datetime(ff_data.index)
-            
-            ff_data.index = pd.to_datetime(ff_data.index).normalize()
-            if ff_data.index.tz is not None: 
-                ff_data.index = ff_data.index.tz_localize(None)
-
-            # 無リスク金利（RF）の保証（万が一無い場合）
-            if not any('RF' in c.upper() for c in ff_data.columns):
-                ff_data['RF'] = 0.0
-
-            # 4. 欠損値補間フィルター
-            return ff_data.interpolate(method='linear').ffill().bfill()
-            
+            return load_factor_dataset(
+                region=region,
+                start_date=_self.start_date,
+                end_date=_self.end_date,
+            )
         except Exception:
-            # Pandasの read_csv を使い、ブラウザ偽装ヘッダーを付けてシンプルなCSVデータを直接読み込む
-            try:
-                url = f"https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/{name}_CSV.zip"
-                storage_options = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
-                
-                # Pandasが直接URL先のZIPファイル内のCSVを読み解く
-                df = pd.read_csv(
-                    url, 
-                    compression='zip', 
-                    skiprows=3, 
-                    index_col=0, 
-                    storage_options=storage_options,
-                    encoding='utf-8'
-                )
-                
-                # インデックスを日時に変換 (例: "202001" -> 2020-01-01)
-                df.index = pd.to_datetime(df.index.astype(str), format='%Y%m', errors='coerce')
-                df = df.dropna()
-                
-                # 指定期間でフィルタリングし、パーセントを小数に変換
-                ff_data = df.loc[_self.start_date:_self.end_date] / 100.0
-                ff_data.index = ff_data.index.to_period('M').to_timestamp(freq='ME')
-                
-                if ff_data.index.tz is not None: 
-                    ff_data.index = ff_data.index.tz_localize(None)
-                    
-                return ff_data
-            except Exception as e:
-                print(f"Factor Data Fetch Error (Fallback): {e}")
-                return pd.DataFrame()
+            return pd.DataFrame()
 
     @st.cache_data(ttl=3600*24)
     def fetch_historical_prices(_self, tickers, base_currency='JPY'):
@@ -279,12 +216,18 @@ class PortfolioAnalyzer:
         filtered_weights = {k: weights_dict[k] for k in valid_tickers}
         total_weight = sum(filtered_weights.values())
         norm_weights = {k: v/total_weight for k, v in filtered_weights.items()}
-        
-        # 非上場期間（NaN）をベンチマークや平均値で埋めず、「0.0（現金）」として扱う
-        filled_returns = returns_df[valid_tickers].copy().fillna(0.0)
+
+        working_returns = returns_df[valid_tickers].copy().sort_index()
+        complete_history = working_returns.notna().all(axis=1)
+        if complete_history.any():
+            first_complete_date = complete_history[complete_history].index[0]
+            working_returns = working_returns.loc[first_complete_date:]
+
+        # 共通ヒストリー開始後の細かな欠損のみ 0 扱いにして、初期期間の歪みを避ける
+        filled_returns = working_returns.fillna(0.0)
         
         port_ret_list = []
-        current_weights = pd.Series(norm_weights)
+        current_weights = pd.Series(norm_weights, dtype=float)
         
         for date, row in filled_returns.iterrows():
             ret = (current_weights * row).sum()
@@ -347,7 +290,7 @@ class PortfolioAnalyzer:
             return None, None
 
     @staticmethod
-    def run_monte_carlo_simulation(port_ret, n_years=20, n_simulations=7500, initial_investment=1000000):
+    def run_monte_carlo_simulation(port_ret, n_years=20, n_simulations=7500, initial_investment=1000000, random_seed=42):
         if port_ret.empty:
             return None, None
 
@@ -360,9 +303,10 @@ class PortfolioAnalyzer:
         log_returns = np.log(1 + clean_ret)
         mu_log = log_returns.mean()    
         sigma_log = log_returns.std()  
-        
-        Z = np.random.normal(0, 1, (n_months, n_simulations))
-        monthly_returns = np.exp(mu_log + sigma_log * Z)
+
+        rng = np.random.default_rng(random_seed)
+        simulated_log_returns = rng.normal(mu_log, sigma_log, size=(n_months, n_simulations))
+        monthly_returns = np.exp(simulated_log_returns)
         
         price_paths = np.zeros((n_months + 1, n_simulations))
         price_paths[0] = initial_investment
